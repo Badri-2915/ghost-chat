@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl;
+  }
+
+  .ghost-gradient {
+    background: linear-gradient(135deg, #4550e7 0%, #7a94f9 50%, #5a6ff3 100%);
+  }
+
+  .ghost-input {
+    @apply w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl
+           text-white placeholder-white/40 outline-none
+           focus:border-ghost-500 focus:ring-1 focus:ring-ghost-500
+           transition-all duration-200;
+  }
+
+  .ghost-btn {
+    @apply px-6 py-3 rounded-xl font-semibold text-white
+           ghost-gradient
+           hover:opacity-90 active:scale-[0.98]
+           transition-all duration-200
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .ghost-btn-outline {
+    @apply px-6 py-3 rounded-xl font-semibold text-ghost-400
+           border border-ghost-500/30
+           hover:bg-ghost-500/10 active:scale-[0.98]
+           transition-all duration-200;
+  }
+
+  .message-fade-out {
+    animation: fadeOut 0.5s ease-out forwards;
+  }
+
+  @keyframes fadeOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-10px); }
+  }
+
+  @keyframes pulse-dot {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+
+  .typing-dot {
+    animation: pulse-dot 1.4s infinite ease-in-out;
+  }
+
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+}

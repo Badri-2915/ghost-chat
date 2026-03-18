@@ -1,0 +1,43 @@
+# =============================================================================
+# Render Blueprint — Infrastructure-as-Code for deploying to Render.com
+# =============================================================================
+# This file defines all services needed to run Ghost Chat:
+# 1. Web service (Docker) — Node.js backend + React frontend
+# 2. Redis service — For Pub/Sub, TTL, presence, rate limiting
+#
+# To deploy: Render Dashboard → New + → Blueprint → Connect GitHub repo
+# Render reads this file and creates both services automatically.
+# =============================================================================
+
+services:
+  # ---- Web Service: Node.js + React (single container) ----
+  - type: web
+    name: ghost-chat
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      # Redis URL (auto-populated from the Redis service below)
+      - key: REDIS_URL
+        fromService:
+          name: ghost-chat-redis
+          type: redis
+          property: connectionString
+
+      # Public config values
+      - key: PORT
+        value: "3001"
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: https://badri.online
+
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+  # ---- Redis Service ----
+  - type: redis
+    name: ghost-chat-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

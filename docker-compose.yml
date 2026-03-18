@@ -1,0 +1,54 @@
+# =============================================================================
+# Docker Compose — Local development setup
+# =============================================================================
+# Starts the backend and Redis for local development.
+#
+# Usage:
+#   docker-compose up        # Start backend + Redis
+#   docker-compose down      # Stop everything
+#   docker-compose up -d     # Start in background
+#
+# Frontend should be started separately: cd frontend && npm run dev
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # ---- Node.js Backend ----
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    environment:
+      - PORT=3001
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=development
+      - CORS_ORIGINS=http://localhost:5173
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: npx nodemon src/index.js
+    networks:
+      - ghost-network
+
+  # ---- Redis ----
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ghost-network
+
+networks:
+  ghost-network:
+    driver: bridge
