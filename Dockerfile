@@ -36,8 +36,8 @@ COPY backend/ .
 # Copy the built frontend from Stage 1 into backend's static directory
 COPY --from=frontend-build /frontend/dist ./static
 
-# Expose the application port
-EXPOSE 3001
+# Expose the application port (Render sets PORT dynamically)
+EXPOSE 10000
 
 # Run the server
 CMD ["node", "src/index.js"]

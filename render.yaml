@@ -25,12 +25,10 @@ services:
           property: connectionString
 
       # Public config values
-      - key: PORT
-        value: "3001"
       - key: NODE_ENV
         value: production
       - key: CORS_ORIGINS
-        value: https://badri.online
+        value: https://badri.online,https://ghost-chat.onrender.com
 
     healthCheckPath: /api/health
     autoDeploy: true
