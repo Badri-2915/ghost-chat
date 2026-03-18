@@ -27,7 +27,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: CORS_ORIGINS
-        value: https://badri.online,https://ghost-chat.onrender.com
+        value: https://badri.online,https://ghost-chat-broc.onrender.com
 
     healthCheckPath: /api/health
     autoDeploy: true
