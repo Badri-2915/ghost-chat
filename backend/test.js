@@ -63,7 +63,8 @@ async function testRoomCreation() {
   assert(roomData.username === 'Alice', 'Username matches');
   assert(roomData.isCreator === true, 'Marked as creator');
 
-  const users = await usersPromise;
+  const usersPayload = await usersPromise;
+  const users = usersPayload.users || usersPayload;
   const userIds = Object.keys(users);
   assert(userIds.length === 1, 'One user in room');
   assert(users[roomData.userId].username === 'Alice', 'User name in presence list');
@@ -107,7 +108,8 @@ async function testJoinRequestFlow() {
   await joinApprovedPromise;
   assert(true, 'Joiner received join-approved');
 
-  const updatedUsers = await usersUpdatedPromise;
+  const updatedUsersPayload = await usersUpdatedPromise;
+  const updatedUsers = updatedUsersPayload.users || updatedUsersPayload;
   assert(Object.keys(updatedUsers).length === 2, 'Two users in room after approval');
 
   // Test rejection with a third user
@@ -269,7 +271,8 @@ async function testPresenceOnDisconnect() {
   const leftData = await userLeftPromise;
   assert(leftData.username === 'Bob', 'User left event shows Bob');
 
-  const updatedUsers = await usersUpdatedPromise;
+  const updatedUsersPayload = await usersUpdatedPromise;
+  const updatedUsers = updatedUsersPayload.users || updatedUsersPayload;
   assert(Object.keys(updatedUsers).length === 1, 'Only 1 user remains after disconnect');
 
   creator.disconnect();

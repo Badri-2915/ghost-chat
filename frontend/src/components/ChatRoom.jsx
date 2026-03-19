@@ -1,12 +1,12 @@
 // =============================================================================
 // ChatRoom.jsx — Main chat interface component.
-// Includes header with room info, message area with auto-scroll, reply bar,
-// typing indicator, message input, panic delete button, sidebar with users
-// and join requests, security info panel, and toast notifications.
+// Includes sticky header with room info, message area with auto-scroll, reply
+// bar, typing indicator, message input with inline TTL picker, panic delete,
+// sidebar with users/join requests, disconnect overlay, and toast notifications.
 // =============================================================================
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Copy, Ghost, Wifi, WifiOff, Menu, X, Shield, AlertTriangle, Bomb, Reply } from 'lucide-react';
+import { Send, Copy, Ghost, Wifi, WifiOff, Users, X, Shield, AlertTriangle, Bomb, Reply, LogOut, ChevronDown, Timer } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 import MessageBubble from './MessageBubble';
 import TypingIndicator from './TypingIndicator';
@@ -21,6 +21,7 @@ export default function ChatRoom() {
     roomCode,
     userId,
     isCreator,
+    users,
     messages,
     connected,
     reconnecting,
@@ -31,26 +32,46 @@ export default function ChatRoom() {
     panicDelete,
     replyTo,
     setReplyTo,
+    leaveRoom,
   } = useChat();
 
   const [text, setText] = useState('');
   const [showSidebar, setShowSidebar] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const [confirmPanic, setConfirmPanic] = useState(false);
+  const [showTimerPicker, setShowTimerPicker] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Auto-scroll to bottom on new messages
+  const userCount = Object.keys(users).length;
+
+  // Auto-scroll to bottom on new messages (only if user is near bottom)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (atBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, atBottom]);
+
+  // Track if user is scrolled to bottom
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const threshold = 80;
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < threshold);
+  }, []);
 
   // Focus input when reply is set
   useEffect(() => {
     if (replyTo) inputRef.current?.focus();
   }, [replyTo]);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setAtBottom(true);
+  }, []);
 
   const handleSend = useCallback(
     (e) => {
@@ -59,6 +80,7 @@ export default function ChatRoom() {
       sendMessage(text.trim());
       setText('');
       stopTyping();
+      setAtBottom(true);
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = null;
@@ -88,47 +110,76 @@ export default function ChatRoom() {
   const handlePanicDelete = useCallback(() => {
     if (!confirmPanic) {
       setConfirmPanic(true);
-      setTimeout(() => setConfirmPanic(false), 3000); // reset after 3s
+      setTimeout(() => setConfirmPanic(false), 3000);
       return;
     }
     panicDelete();
     setConfirmPanic(false);
   }, [confirmPanic, panicDelete]);
 
+  // Close sidebar on mobile when clicking outside
+  useEffect(() => {
+    if (!showSidebar) return;
+    const close = (e) => {
+      if (e.target.closest('aside')) return;
+      setShowSidebar(false);
+    };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [showSidebar]);
+
   return (
     <div className="h-screen flex flex-col bg-ghost-950">
       {/* Toast notifications */}
       <ToastContainer />
 
-      {/* Header */}
-      <header className="shrink-0 border-b border-white/5 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl ghost-gradient flex items-center justify-center">
-              <Ghost className="w-5 h-5" />
+      {/* Disconnect overlay */}
+      {!connected && (
+        <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm flex items-center justify-center">
+          <div className="glass-card p-6 max-w-xs w-full mx-4 text-center space-y-3">
+            <WifiOff className="w-8 h-8 text-red-400 mx-auto" />
+            <h3 className="font-semibold text-base">Connection Lost</h3>
+            <p className="text-white/50 text-sm">
+              {reconnecting ? 'Reconnecting to server...' : 'Waiting for network...'}
+            </p>
+            <div className="flex justify-center">
+              <div className="w-5 h-5 border-2 border-ghost-400 border-t-transparent rounded-full animate-spin" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-semibold text-sm">Ghost Chat</h1>
-                {connected ? (
-                  <Wifi className="w-3 h-3 text-green-400" />
-                ) : (
-                  <WifiOff className="w-3 h-3 text-red-400" />
-                )}
+          </div>
+        </div>
+      )}
+
+      {/* Header — sticky, compact */}
+      <header className="shrink-0 border-b border-white/5 bg-ghost-950/95 backdrop-blur-sm z-20">
+        <div className="flex items-center justify-between px-3 py-2.5">
+          {/* Left: logo + room info */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg ghost-gradient flex items-center justify-center shrink-0">
+              <Ghost className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={copyRoomCode}
+                  className="flex items-center gap-1 text-xs font-mono text-white/60 hover:text-white/90 transition-colors"
+                >
+                  {roomCode}
+                  <Copy className="w-3 h-3" />
+                </button>
+                {copied && <span className="text-green-400 text-[10px] font-medium">Copied!</span>}
               </div>
-              <button
-                onClick={copyRoomCode}
-                className="flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition-colors"
-              >
-                <span className="font-mono">{roomCode}</span>
-                <Copy className="w-3 h-3" />
-                {copied && <span className="text-green-400 text-[10px]">Copied!</span>}
-              </button>
+              <div className="flex items-center gap-1.5 text-[11px] text-white/30">
+                <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span>{connected ? 'Encrypted' : 'Offline'}</span>
+                <span className="text-white/15">·</span>
+                <span>{userCount} {userCount === 1 ? 'user' : 'users'}</span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Panic delete button */}
+          {/* Right: action buttons */}
+          <div className="flex items-center gap-1.5">
+            {/* Panic delete */}
             <button
               onClick={handlePanicDelete}
               className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
@@ -138,81 +189,48 @@ export default function ChatRoom() {
               }`}
               title={confirmPanic ? 'Click again to confirm' : 'Delete all messages'}
             >
-              <Bomb className={`w-4 h-4 ${confirmPanic ? 'text-red-400' : 'text-white/40'}`} />
+              <Bomb className={`w-3.5 h-3.5 ${confirmPanic ? 'text-red-400' : 'text-white/40'}`} />
             </button>
+            {/* Users / sidebar toggle */}
             <button
-              onClick={() => setShowInfo(!showInfo)}
-              className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
-              title="Security info"
+              onClick={(e) => { e.stopPropagation(); setShowSidebar(!showSidebar); }}
+              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                showSidebar ? 'bg-ghost-600/30 text-ghost-400' : 'bg-white/5 hover:bg-white/10 text-white/40'
+              }`}
+              title="Users & info"
             >
-              <Shield className="w-4 h-4 text-ghost-400" />
-            </button>
-            <button
-              onClick={() => setShowSidebar(!showSidebar)}
-              className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors md:hidden"
-            >
-              {showSidebar ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+              <Users className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
-        {/* Reconnecting banner */}
-        {reconnecting && (
-          <div className="mt-2 text-xs text-yellow-400/70 text-center">
-            Reconnecting...
-          </div>
-        )}
-
         {/* Error banner */}
         {error && (
-          <div className="mt-2 text-xs text-red-400 text-center bg-red-500/10 rounded-lg px-3 py-1.5">
-            {error}
-          </div>
-        )}
-
-        {/* Security info panel */}
-        {showInfo && (
-          <div className="mt-3 p-3 rounded-xl bg-white/5 border border-white/10 text-xs space-y-2">
-            <div className="flex items-start gap-2">
-              <Shield className="w-4 h-4 text-ghost-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-white/70">Messages are <strong className="text-white">end-to-end encrypted</strong> using AES-GCM. The server only relays encrypted data.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-yellow-400/70 shrink-0 mt-0.5" />
-              <div className="text-white/40">
-                <p>Honest limitations:</p>
-                <ul className="list-disc list-inside mt-1 space-y-0.5">
-                  <li>Cannot prevent screenshots</li>
-                  <li>Network metadata (IP) visible to ISP/hosting</li>
-                  <li>Messages permanently lost after deletion</li>
-                  <li>Requires trust in client-side encryption</li>
-                </ul>
-              </div>
+          <div className="px-3 pb-2">
+            <div className="text-xs text-red-400 text-center bg-red-500/10 rounded-lg px-3 py-1.5">
+              {error}
             </div>
           </div>
         )}
       </header>
 
       {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Messages area */}
         <main className="flex-1 flex flex-col min-w-0">
-          {/* Timer selector */}
-          <div className="shrink-0 border-b border-white/5 px-3 py-1.5">
-            <TimerSelector />
-          </div>
-
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 sm:px-4"
+          >
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-white/20 space-y-3">
-                <Ghost className="w-12 h-12" />
-                <p className="text-sm">No messages yet. Start chatting!</p>
-                <p className="text-xs">
-                  Share room code <span className="font-mono text-ghost-400/50">{roomCode}</span> to invite others.
-                </p>
+                <Ghost className="w-10 h-10" />
+                <p className="text-sm">No messages yet</p>
+                <button onClick={copyRoomCode} className="text-xs text-ghost-400/50 hover:text-ghost-400 transition-colors">
+                  Share code <span className="font-mono">{roomCode}</span> to invite others
+                </button>
               </div>
             )}
             {messages.map((msg) => (
@@ -221,40 +239,68 @@ export default function ChatRoom() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Scroll-to-bottom button (when not at bottom) */}
+          {!atBottom && messages.length > 0 && (
+            <button
+              onClick={scrollToBottom}
+              className="absolute bottom-28 left-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-ghost-600/80 backdrop-blur-sm flex items-center justify-center shadow-lg hover:bg-ghost-600 transition-colors z-10"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          )}
+
           {/* Typing indicator */}
           <TypingIndicator />
 
-          {/* Reply bar (shown when replying to a message) */}
+          {/* Reply bar */}
           {replyTo && (
-            <div className="shrink-0 border-t border-white/5 px-4 py-2 flex items-center gap-3 bg-ghost-900/50">
-              <Reply className="w-4 h-4 text-ghost-400 shrink-0" />
+            <div className="shrink-0 border-t border-white/5 px-3 py-2 flex items-center gap-2 bg-ghost-900/50">
+              <div className="w-1 h-8 rounded-full bg-ghost-400 shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-xs text-ghost-400 font-medium">{replyTo.senderName}</div>
-                <div className="text-xs text-white/40 truncate">{replyTo.content}</div>
+                <div className="text-[11px] text-ghost-400 font-medium">{replyTo.senderName}</div>
+                <div className="text-[11px] text-white/40 truncate">{replyTo.content}</div>
               </div>
-              <button onClick={() => setReplyTo(null)} className="shrink-0 text-white/30 hover:text-white/60">
-                <X className="w-4 h-4" />
+              <button onClick={() => setReplyTo(null)} className="shrink-0 text-white/30 hover:text-white/60 p-1">
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          {/* Input */}
-          <form onSubmit={handleSend} className="shrink-0 border-t border-white/5 px-4 py-3">
+          {/* Input area with inline TTL */}
+          <form onSubmit={handleSend} className="shrink-0 border-t border-white/5 px-3 py-2.5">
             <div className="flex items-center gap-2">
+              {/* TTL toggle */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowTimerPicker(!showTimerPicker)}
+                  className="w-9 h-9 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors shrink-0"
+                  title="Message timer"
+                >
+                  <Timer className="w-4 h-4 text-white/40" />
+                </button>
+                {showTimerPicker && (
+                  <div className="absolute bottom-full left-0 mb-2 z-30">
+                    <div className="glass-card p-2 shadow-2xl">
+                      <TimerSelector onSelect={() => setShowTimerPicker(false)} />
+                    </div>
+                  </div>
+                )}
+              </div>
               <input
                 ref={inputRef}
                 type="text"
                 value={text}
                 onChange={handleInputChange}
-                placeholder={replyTo ? `Reply to ${replyTo.senderName}...` : 'Type a message...'}
-                className="flex-1 ghost-input !py-2.5 !rounded-xl"
+                placeholder={replyTo ? `Reply to ${replyTo.senderName}...` : 'Message...'}
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-ghost-500/50 transition-colors"
                 maxLength={2000}
                 autoFocus
               />
               <button
                 type="submit"
                 disabled={!text.trim() || !connected}
-                className="w-10 h-10 rounded-xl ghost-gradient flex items-center justify-center hover:opacity-90 active:scale-95 transition-all disabled:opacity-30"
+                className="w-9 h-9 rounded-xl ghost-gradient flex items-center justify-center hover:opacity-90 active:scale-95 transition-all disabled:opacity-30 shrink-0"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -262,34 +308,64 @@ export default function ChatRoom() {
           </form>
         </main>
 
-        {/* Sidebar (desktop always visible, mobile toggle) */}
-        <aside
-          className={`
-            w-64 border-l border-white/5 p-4 space-y-6 overflow-y-auto bg-ghost-950
-            ${showSidebar ? 'block absolute right-0 top-0 bottom-0 z-50 shadow-2xl' : 'hidden'}
-            md:block md:relative md:shadow-none
-          `}
-        >
-          {/* Mobile close button */}
-          <div className="flex justify-end md:hidden">
-            <button onClick={() => setShowSidebar(false)}>
-              <X className="w-5 h-5 text-white/40" />
-            </button>
-          </div>
+        {/* Sidebar — slides in from right */}
+        {showSidebar && (
+          <div className="fixed inset-0 z-40 md:relative md:inset-auto" onClick={() => setShowSidebar(false)}>
+            {/* Backdrop (mobile only) */}
+            <div className="absolute inset-0 bg-black/40 md:hidden" />
+            <aside
+              onClick={(e) => e.stopPropagation()}
+              className="absolute right-0 top-0 bottom-0 w-72 border-l border-white/5 bg-ghost-950 overflow-y-auto shadow-2xl md:relative md:w-64 md:shadow-none animate-slide-in-right"
+            >
+              <div className="p-4 space-y-5">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white/80">Room Info</h3>
+                  <button onClick={() => setShowSidebar(false)} className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 md:hidden">
+                    <X className="w-4 h-4 text-white/40" />
+                  </button>
+                </div>
 
-          <JoinRequests />
-          <UserList />
+                {/* Room details */}
+                <div className="space-y-2 p-3 rounded-xl bg-white/5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-white/40">Room Code</span>
+                    <button onClick={copyRoomCode} className="font-mono text-ghost-400 hover:text-ghost-300 transition-colors">
+                      {roomCode}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-white/40">You</span>
+                    <span className="text-white/70">{username} {isCreator && <span className="text-yellow-400">👑</span>}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-white/40">Encryption</span>
+                    <span className="text-green-400/70 flex items-center gap-1"><Shield className="w-3 h-3" /> AES-GCM</span>
+                  </div>
+                </div>
 
-          {/* Room info */}
-          <div className="space-y-2 pt-4 border-t border-white/5">
-            <p className="text-[10px] text-white/20 uppercase tracking-wider font-medium">Room Info</p>
-            <div className="text-xs text-white/30 space-y-1">
-              <p>Code: <span className="font-mono text-white/50">{roomCode}</span></p>
-              <p>You: <span className="text-white/50">{username}</span></p>
-              <p>Role: <span className="text-white/50">{isCreator ? 'Creator' : 'Member'}</span></p>
-            </div>
+                <JoinRequests />
+                <UserList />
+
+                {/* Security note */}
+                <div className="p-3 rounded-xl bg-white/[0.03] border border-white/5 text-[11px] text-white/30 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-white/50">
+                    <Shield className="w-3 h-3 text-ghost-400" /> <span className="font-medium">E2E Encrypted</span>
+                  </div>
+                  <p>Messages encrypted client-side. Server cannot read them. All data auto-deletes.</p>
+                </div>
+
+                {/* Leave room */}
+                <button
+                  onClick={leaveRoom}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm text-red-400/70 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                >
+                  <LogOut className="w-4 h-4" /> Leave Room
+                </button>
+              </div>
+            </aside>
           </div>
-        </aside>
+        )}
       </div>
     </div>
   );

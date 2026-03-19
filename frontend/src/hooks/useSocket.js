@@ -36,21 +36,40 @@ export default function useSocket() {
       console.log('[Socket] Connected:', socket.id);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       setConnected(false);
-      console.log('[Socket] Disconnected');
+      console.log('[Socket] Disconnected:', reason);
+      // If server closed the connection, attempt reconnect
+      if (reason === 'io server disconnect') {
+        socket.connect();
+      }
     });
 
-    socket.on('reconnecting', () => {
+    socket.io.on('reconnect_attempt', () => {
       setReconnecting(true);
     });
 
-    socket.on('reconnect', () => {
+    socket.io.on('reconnect', () => {
       setReconnecting(false);
       setConnected(true);
     });
 
+    // Handle browser online/offline events
+    const handleOnline = () => {
+      if (!socket.connected) {
+        setReconnecting(true);
+        socket.connect();
+      }
+    };
+    const handleOffline = () => {
+      setConnected(false);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       socket.disconnect();
     };
   }, []);

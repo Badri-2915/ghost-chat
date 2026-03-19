@@ -65,10 +65,13 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Toast Notifications** | Join requests with inline Accept/Reject buttons |
 | **Typing Indicators** | See who's typing in real time |
 | **Read Receipts** | Sent → Delivered → Read status tracking |
-| **Presence System** | Online users list with creator badge |
+| **Presence System** | Online users list with creator badge (crown) |
 | **Tab Detection** | Notifies room when a user switches tabs |
 | **Screenshot Awareness** | Best-effort detection warns room members |
 | **Rate Limiting** | Per-user message limits + per-IP connection limits |
+| **Connection Handling** | Disconnect overlay, auto-reconnect, online/offline detection |
+| **Leave Room** | Clean exit with full state reset and server-side cleanup |
+| **Scroll-to-Bottom** | Smart auto-scroll + manual scroll button when reading history |
 | **No Data Storage** | No accounts, no databases, no persistent logs |
 
 ---
@@ -262,6 +265,59 @@ Key Exchange (future):
 
 ---
 
+## Capacity & Scalability
+
+### Realistic Limits (Render Free Tier)
+
+| Metric | Estimate | Bottleneck |
+|--------|----------|-----------|
+| Concurrent users (total) | ~50–100 | Render free tier memory (512 MB) |
+| Users per room | ~20 | Socket.IO broadcast fan-out |
+| Active rooms | ~50 simultaneous | Redis memory (25 MB free) |
+| Messages per minute | ~500 total | Rate limit: 30/user/min |
+| Average message size | ~300–500 bytes | Encrypted payload + metadata |
+
+### Storage Design — No Database
+
+Ghost Chat **intentionally has no permanent storage**:
+
+- **No SQL database** (no PostgreSQL, MySQL, SQLite)
+- **No NoSQL database** (no MongoDB, DynamoDB)
+- **No file storage** (no S3, no disk writes)
+- **Only Redis** — used purely as a temporary cache with TTL-based auto-expiry
+
+Every piece of data has a time-to-live:
+
+| Data | TTL | What happens when it expires |
+|------|-----|------------------------------|
+| Room metadata | 6 hours | Room ceases to exist |
+| User presence | 6 hours | User entry removed |
+| Join requests | 30 minutes | Request auto-rejected |
+| Messages | 5s – 5m (user-selected) | Message permanently deleted |
+| Rate limit counters | 60 seconds | Counter resets |
+
+**If Redis restarts, all data is lost — by design.** There is nothing to recover, nothing to back up, and nothing to breach.
+
+### Why This Matters
+
+- **No data accumulation** — storage usage stays near-constant regardless of how long the app runs
+- **No cleanup scripts** — Redis handles all expiration natively
+- **No scaling headaches** — there's no growing database to manage
+- **Privacy by architecture** — even a server compromise reveals nothing (E2EE + no persistent data)
+
+### Scaling Beyond Free Tier
+
+| Change | Enables |
+|--------|---------|
+| Render paid tier ($7/mo) | ~500 concurrent users, dedicated resources |
+| Socket.IO Redis adapter | Horizontal scaling across multiple Node.js processes |
+| Redis Cluster | Higher memory, better throughput |
+| Cloudflare CDN (free) | Faster static asset delivery worldwide |
+
+The architecture is designed to scale — but the current deployment is right-sized for its purpose: small, private rooms.
+
+---
+
 ## Security & Privacy
 
 ### What this system does:
@@ -270,9 +326,11 @@ Key Exchange (future):
 - No permanent message storage — Redis TTL auto-expires everything
 - No user accounts, no emails, no personal data
 - Messages auto-delete from all clients and server
-- Rate limiting prevents spam and abuse
+- Rate limiting prevents spam and abuse (30 msgs/min, 200 conn/min)
 - Tab detection warns when users switch away
 - Screenshot detection (best-effort) warns room members
+- Connection loss overlay with auto-reconnect
+- Leave room functionality with full state cleanup
 
 ### Honest Limitations:
 - Cannot prevent network-level metadata visibility (IP addresses)
@@ -280,8 +338,10 @@ Key Exchange (future):
 - Messages are permanently lost after deletion (by design)
 - Room key is derived from room code — anyone with the code can decrypt
 - Requires trust in client-side encryption implementation
+- Single-server deployment (no horizontal scaling currently)
+- Free tier cold starts (~30s after 15 min inactivity, mitigated by UptimeRobot)
 
-> Designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity.
+> Designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity. Scales with infrastructure, not unlimited.
 
 ---
 

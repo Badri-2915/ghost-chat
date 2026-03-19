@@ -54,7 +54,8 @@ async function handleCreateRoom(socket, io, { username }) {
     isCreator: true,
   });
 
-  io.to(roomCode).emit('users-updated', await getRoomUsers(roomCode));
+  const users = await getRoomUsers(roomCode);
+  io.to(roomCode).emit('users-updated', { users, creator: userId });
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +120,8 @@ async function handleApproveJoin(socket, io, { roomCode, userId }) {
   }
 
   const users = await getRoomUsers(roomCode);
-  io.to(roomCode).emit('users-updated', users);
+  const roomData = await getRoom(roomCode);
+  io.to(roomCode).emit('users-updated', { users, creator: roomData?.creator });
 
   // Send updated pending list to creator
   const updatedRequests = await getJoinRequests(roomCode);
@@ -169,7 +171,8 @@ async function handleDisconnect(socket, io) {
 
   await removeUserFromRoom(roomId, userId);
   const users = await getRoomUsers(roomId);
-  io.to(roomId).emit('users-updated', users);
+  const roomData = await getRoom(roomId);
+  io.to(roomId).emit('users-updated', { users, creator: roomData?.creator });
   io.to(roomId).emit('user-left', { userId, username });
 }
 

@@ -27,6 +27,7 @@ export function ChatProvider({ children }) {
   const [typingUsers, setTypingUsers] = useState({});
   const [error, setError] = useState('');
   const [selectedTTL, setSelectedTTL] = useState('5m');
+  const [creatorId, setCreatorId] = useState('');
 
   // ---- New feature state ----
   const [replyTo, setReplyTo] = useState(null);          // message being replied to
@@ -89,7 +90,14 @@ export function ChatProvider({ children }) {
       },
 
       'users-updated': (data) => {
-        setUsers(data);
+        // data is { users: { userId: { username, joinedAt } }, creator: string }
+        if (data && data.users) {
+          setUsers(data.users);
+          if (data.creator) setCreatorId(data.creator);
+        } else {
+          // Backward compat: plain object
+          setUsers(data);
+        }
       },
 
       // Join requests — also trigger a visible toast for the creator
@@ -305,6 +313,29 @@ export function ChatProvider({ children }) {
     emit('panic-delete', { roomCode });
   }, [emit, roomCode]);
 
+  // Leave room: disconnect from current room and reset to landing
+  const leaveRoom = useCallback(() => {
+    setScreen('landing');
+    setRoomCode('');
+    setUserId('');
+    setUsername('');
+    setIsCreator(false);
+    setCreatorId('');
+    setUsers({});
+    setMessages([]);
+    setJoinRequests({});
+    setTypingUsers({});
+    setReplyTo(null);
+    setToasts([]);
+    setError('');
+    roomKeyRef.current = null;
+    // Socket disconnect triggers server-side cleanup; reconnect for fresh state
+    if (socket) {
+      socket.disconnect();
+      socket.connect();
+    }
+  }, [socket]);
+
   const markRead = useCallback(
     (messageId) => {
       emit('message-read', { roomCode, messageId });
@@ -343,6 +374,7 @@ export function ChatProvider({ children }) {
     sendMessage,
     deleteMessage,
     panicDelete,
+    leaveRoom,
     markRead,
     startTyping,
     stopTyping,
@@ -351,6 +383,7 @@ export function ChatProvider({ children }) {
     setReplyTo,
     toasts,
     dismissToast,
+    creatorId,
     userVisibility,
     screenshotAlerts,
   };

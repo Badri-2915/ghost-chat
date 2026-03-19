@@ -16,16 +16,19 @@ const TTL_OPTIONS = [
   { value: '5m', label: '5m' },
 ];
 
-export default function TimerSelector() {
+export default function TimerSelector({ onSelect }) {
   const { selectedTTL, setSelectedTTL } = useChat();
 
   return (
     <div className="flex items-center gap-1.5 overflow-x-auto py-1 px-1">
-      <Timer className="w-4 h-4 text-white/40 shrink-0" />
+      <Timer className="w-3.5 h-3.5 text-white/40 shrink-0" />
       {TTL_OPTIONS.map((opt) => (
         <button
           key={opt.value}
-          onClick={() => setSelectedTTL(opt.value)}
+          onClick={() => {
+            setSelectedTTL(opt.value);
+            if (onSelect) onSelect(opt.value);
+          }}
           className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
             selectedTTL === opt.value
               ? 'ghost-gradient text-white shadow-sm'

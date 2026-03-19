@@ -208,7 +208,8 @@ async function testRoomCreation() {
   const usersPromise = waitForEvent(verifyClient, 'users-updated');
   verifyClient.emit('create-room', { username: 'VerifyUser' });
   const usersData = await usersPromise;
-  assert(Object.keys(usersData).length === 1, 'Creator sees 1 user in room');
+  const usersObj = usersData.users || usersData;
+  assert(Object.keys(usersObj).length === 1, 'Creator sees 1 user in room');
 
   // Cleanup
   disconnectAll(client, room2.client, room3.client, emptyUser, longUser, specialUser, verifyClient, ...rooms.map(r => r.client));
@@ -738,7 +739,8 @@ async function testPresenceAndDisconnect() {
   const left = await leftP;
   const users = await usersP;
   assert(left.username === 'Bob', 'User left event shows correct name');
-  assert(Object.keys(users).length === 1, 'Only 1 user remains');
+  const usersObj = users.users || users;
+  assert(Object.keys(usersObj).length === 1, 'Only 1 user remains');
 
   // Creator disconnect
   const { creator: c2, joiner: j2 } = await setupTwoUsers('A2', 'B2');
