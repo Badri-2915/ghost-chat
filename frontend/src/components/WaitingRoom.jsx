@@ -1,3 +1,8 @@
+// =============================================================================
+// WaitingRoom.jsx — Shown while a user waits for the room creator to approve
+// their join request. Displays a spinner and auto-updates on approval/rejection.
+// =============================================================================
+
 import { Ghost, Loader2 } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 

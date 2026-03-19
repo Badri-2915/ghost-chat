@@ -1,9 +1,17 @@
+// =============================================================================
+// socket/handlers.js — Message handling, delivery receipts, typing indicators,
+// panic delete, and user awareness events (visibility, screenshot detection).
+// =============================================================================
+
 const { v4: uuidv4 } = require('uuid');
 const { storeMessage, deleteMessage, refreshRoomTTL } = require('../redis');
 const { rateLimitMessage } = require('../rateLimiter');
 const { getSocketUser } = require('./rooms');
 
-async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl }) {
+// ---------------------------------------------------------------------------
+// Send a new message to the room. Supports optional replyTo for threading.
+// ---------------------------------------------------------------------------
+async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, replyTo }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode || userData.pending) {
     socket.emit('error-message', { message: 'Not in room' });
@@ -20,7 +28,7 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl }
   const messageId = uuidv4();
   const timestamp = Date.now();
 
-  // TTL mapping (seconds)
+  // TTL mapping: user-selected lifetime → seconds for Redis expiry
   const ttlMap = {
     'after-seen': 10,     // 10s buffer after seen
     '5s': 5,
@@ -39,6 +47,7 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl }
     encryptedContent,
     ttl,
     timestamp,
+    replyTo: replyTo || null,
   }, ttlSeconds);
 
   await refreshRoomTTL(roomCode);
@@ -52,17 +61,20 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl }
     ttlSeconds,
     timestamp,
     status: 'sent',
+    replyTo: replyTo || null,
   };
 
-  // Send to all users in the room
+  // Broadcast to all users in the room
   io.to(roomCode).emit('new-message', messageData);
 }
 
+// ---------------------------------------------------------------------------
+// Delivery receipt: receiver acknowledges message was delivered to their device
+// ---------------------------------------------------------------------------
 function handleMessageDelivered(socket, io, { roomCode, messageId }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode) return;
 
-  // Notify sender that message was delivered
   socket.to(roomCode).emit('message-status-update', {
     messageId,
     status: 'delivered',
@@ -70,11 +82,13 @@ function handleMessageDelivered(socket, io, { roomCode, messageId }) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Read receipt: receiver confirms message was visible on screen
+// ---------------------------------------------------------------------------
 function handleMessageRead(socket, io, { roomCode, messageId }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode) return;
 
-  // Notify sender that message was read
   socket.to(roomCode).emit('message-status-update', {
     messageId,
     status: 'read',
@@ -82,6 +96,9 @@ function handleMessageRead(socket, io, { roomCode, messageId }) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Typing start/stop: real-time indicator shown to other room members
+// ---------------------------------------------------------------------------
 function handleTypingStart(socket, io, { roomCode }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode) return;
@@ -101,6 +118,9 @@ function handleTypingStop(socket, io, { roomCode }) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Delete a single message from Redis and all connected UIs
+// ---------------------------------------------------------------------------
 async function handleDeleteMessage(socket, io, { roomCode, messageId }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode) return;
@@ -110,6 +130,50 @@ async function handleDeleteMessage(socket, io, { roomCode, messageId }) {
   io.to(roomCode).emit('message-deleted', { messageId });
 }
 
+// ---------------------------------------------------------------------------
+// Panic delete: instantly wipe ALL messages for the entire room.
+// Clears both the UI (via event) and any Redis-stored message data.
+// ---------------------------------------------------------------------------
+async function handlePanicDelete(socket, io, { roomCode }) {
+  const userData = getSocketUser(socket.id);
+  if (!userData || userData.roomId !== roomCode) return;
+
+  // Broadcast to all users to clear their message lists
+  io.to(roomCode).emit('panic-delete', {
+    triggeredBy: userData.username,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Visibility change: user switched tabs or minimized — inform the room.
+// This is best-effort awareness, not prevention.
+// ---------------------------------------------------------------------------
+function handleVisibilityChange(socket, io, { roomCode, isVisible }) {
+  const userData = getSocketUser(socket.id);
+  if (!userData || userData.roomId !== roomCode) return;
+
+  socket.to(roomCode).emit('user-visibility-changed', {
+    userId: userData.userId,
+    username: userData.username,
+    isVisible,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot awareness: best-effort detection (tab blur / minimize).
+// Notifies the room so they know the user may have captured screen content.
+// ---------------------------------------------------------------------------
+function handleScreenshotWarning(socket, io, { roomCode }) {
+  const userData = getSocketUser(socket.id);
+  if (!userData || userData.roomId !== roomCode) return;
+
+  socket.to(roomCode).emit('screenshot-warning', {
+    userId: userData.userId,
+    username: userData.username,
+    timestamp: Date.now(),
+  });
+}
+
 module.exports = {
   handleSendMessage,
   handleMessageDelivered,
@@ -117,4 +181,7 @@ module.exports = {
   handleTypingStart,
   handleTypingStop,
   handleDeleteMessage,
+  handlePanicDelete,
+  handleVisibilityChange,
+  handleScreenshotWarning,
 };

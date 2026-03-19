@@ -1,11 +1,19 @@
+// =============================================================================
+// ChatRoom.jsx — Main chat interface component.
+// Includes header with room info, message area with auto-scroll, reply bar,
+// typing indicator, message input, panic delete button, sidebar with users
+// and join requests, security info panel, and toast notifications.
+// =============================================================================
+
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Copy, Ghost, Wifi, WifiOff, Menu, X, Shield, AlertTriangle } from 'lucide-react';
+import { Send, Copy, Ghost, Wifi, WifiOff, Menu, X, Shield, AlertTriangle, Bomb, Reply } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 import MessageBubble from './MessageBubble';
 import TypingIndicator from './TypingIndicator';
 import TimerSelector from './TimerSelector';
 import UserList from './UserList';
 import JoinRequests from './JoinRequests';
+import ToastContainer from './ToastContainer';
 
 export default function ChatRoom() {
   const {
@@ -20,19 +28,29 @@ export default function ChatRoom() {
     sendMessage,
     startTyping,
     stopTyping,
+    panicDelete,
+    replyTo,
+    setReplyTo,
   } = useChat();
 
   const [text, setText] = useState('');
   const [showSidebar, setShowSidebar] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [confirmPanic, setConfirmPanic] = useState(false);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Focus input when reply is set
+  useEffect(() => {
+    if (replyTo) inputRef.current?.focus();
+  }, [replyTo]);
 
   const handleSend = useCallback(
     (e) => {
@@ -67,8 +85,21 @@ export default function ChatRoom() {
     setTimeout(() => setCopied(false), 2000);
   }, [roomCode]);
 
+  const handlePanicDelete = useCallback(() => {
+    if (!confirmPanic) {
+      setConfirmPanic(true);
+      setTimeout(() => setConfirmPanic(false), 3000); // reset after 3s
+      return;
+    }
+    panicDelete();
+    setConfirmPanic(false);
+  }, [confirmPanic, panicDelete]);
+
   return (
     <div className="h-screen flex flex-col bg-ghost-950">
+      {/* Toast notifications */}
+      <ToastContainer />
+
       {/* Header */}
       <header className="shrink-0 border-b border-white/5 px-4 py-3">
         <div className="flex items-center justify-between">
@@ -97,6 +128,18 @@ export default function ChatRoom() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Panic delete button */}
+            <button
+              onClick={handlePanicDelete}
+              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                confirmPanic
+                  ? 'bg-red-500/30 ring-1 ring-red-400 animate-pulse'
+                  : 'bg-white/5 hover:bg-red-500/20'
+              }`}
+              title={confirmPanic ? 'Click again to confirm' : 'Delete all messages'}
+            >
+              <Bomb className={`w-4 h-4 ${confirmPanic ? 'text-red-400' : 'text-white/40'}`} />
+            </button>
             <button
               onClick={() => setShowInfo(!showInfo)}
               className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
@@ -181,14 +224,29 @@ export default function ChatRoom() {
           {/* Typing indicator */}
           <TypingIndicator />
 
+          {/* Reply bar (shown when replying to a message) */}
+          {replyTo && (
+            <div className="shrink-0 border-t border-white/5 px-4 py-2 flex items-center gap-3 bg-ghost-900/50">
+              <Reply className="w-4 h-4 text-ghost-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-ghost-400 font-medium">{replyTo.senderName}</div>
+                <div className="text-xs text-white/40 truncate">{replyTo.content}</div>
+              </div>
+              <button onClick={() => setReplyTo(null)} className="shrink-0 text-white/30 hover:text-white/60">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Input */}
           <form onSubmit={handleSend} className="shrink-0 border-t border-white/5 px-4 py-3">
             <div className="flex items-center gap-2">
               <input
+                ref={inputRef}
                 type="text"
                 value={text}
                 onChange={handleInputChange}
-                placeholder="Type a message..."
+                placeholder={replyTo ? `Reply to ${replyTo.senderName}...` : 'Type a message...'}
                 className="flex-1 ghost-input !py-2.5 !rounded-xl"
                 maxLength={2000}
                 autoFocus

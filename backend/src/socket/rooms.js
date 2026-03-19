@@ -1,3 +1,12 @@
+// =============================================================================
+// socket/rooms.js — Room lifecycle management for Ghost Chat.
+// Handles room creation, join requests (creator-approved), approval/rejection,
+// user disconnect cleanup, and presence tracking.
+//
+// socketUsers Map tracks the mapping from Socket.IO socket IDs to user data,
+// enabling us to look up which room and identity a socket belongs to.
+// =============================================================================
+
 const { nanoid } = require('nanoid');
 const {
   createRoom,
@@ -11,17 +20,23 @@ const {
   refreshRoomTTL,
 } = require('../redis');
 
-// In-memory map: socketId -> { roomId, userId, username }
+// In-memory map: socketId -> { roomId, userId, username, pending }
+// "pending" is true while a user is waiting for join approval.
 const socketUsers = new Map();
 
+// Generate an 8-character alphanumeric room code (e.g. "AhAeFQVR")
 function generateRoomCode() {
   return nanoid(8);
 }
 
+// Generate a 12-character user ID (unique per session, not persisted)
 function generateUserId() {
   return nanoid(12);
 }
 
+// ---------------------------------------------------------------------------
+// Create a new room: generates code, adds creator, joins Socket.IO room
+// ---------------------------------------------------------------------------
 async function handleCreateRoom(socket, io, { username }) {
   const roomCode = generateRoomCode();
   const userId = generateUserId();
@@ -42,6 +57,9 @@ async function handleCreateRoom(socket, io, { username }) {
   io.to(roomCode).emit('users-updated', await getRoomUsers(roomCode));
 }
 
+// ---------------------------------------------------------------------------
+// Join request: user asks to join, creator must approve. User is "pending".
+// ---------------------------------------------------------------------------
 async function handleJoinRequest(socket, io, { roomCode, username }) {
   const room = await getRoom(roomCode);
 
@@ -65,6 +83,9 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Approve join: creator accepts a pending user into the room
+// ---------------------------------------------------------------------------
 async function handleApproveJoin(socket, io, { roomCode, userId }) {
   const room = await getRoom(roomCode);
   const userData = socketUsers.get(socket.id);
@@ -105,6 +126,9 @@ async function handleApproveJoin(socket, io, { roomCode, userId }) {
   socket.emit('join-requests-updated', updatedRequests);
 }
 
+// ---------------------------------------------------------------------------
+// Reject join: creator denies a pending user's request
+// ---------------------------------------------------------------------------
 async function handleRejectJoin(socket, io, { roomCode, userId }) {
   const room = await getRoom(roomCode);
   const userData = socketUsers.get(socket.id);
@@ -131,6 +155,9 @@ async function handleRejectJoin(socket, io, { roomCode, userId }) {
   socket.emit('join-requests-updated', updatedRequests);
 }
 
+// ---------------------------------------------------------------------------
+// Disconnect cleanup: remove user from room, notify remaining members
+// ---------------------------------------------------------------------------
 async function handleDisconnect(socket, io) {
   const userData = socketUsers.get(socket.id);
   if (!userData) return;
@@ -146,6 +173,7 @@ async function handleDisconnect(socket, io) {
   io.to(roomId).emit('user-left', { userId, username });
 }
 
+// Utility: find a socket ID by userId and roomCode (linear scan of socketUsers)
 function findSocketByUserId(io, userId, roomCode) {
   for (const [socketId, data] of socketUsers.entries()) {
     if (data.userId === userId && data.roomId === roomCode) {
@@ -155,6 +183,7 @@ function findSocketByUserId(io, userId, roomCode) {
   return null;
 }
 
+// Utility: get user data for a given socket ID
 function getSocketUser(socketId) {
   return socketUsers.get(socketId);
 }

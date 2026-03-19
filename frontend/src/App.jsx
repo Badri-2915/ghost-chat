@@ -1,3 +1,9 @@
+// =============================================================================
+// App.jsx — Root component for Ghost Chat.
+// Wraps the app in ChatProvider (context) and renders the appropriate screen
+// based on the current state: Landing (create/join), WaitingRoom, or ChatRoom.
+// =============================================================================
+
 import { ChatProvider, useChat } from './context/ChatContext';
 import Landing from './components/Landing';
 import WaitingRoom from './components/WaitingRoom';

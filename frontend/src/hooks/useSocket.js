@@ -1,6 +1,17 @@
+// =============================================================================
+// useSocket.js — Custom React hook for Socket.IO connection management.
+// Creates a single persistent WebSocket connection to the backend server.
+// Handles auto-reconnect with exponential backoff, and exposes emit/on/off
+// functions that are stable across re-renders (via useCallback).
+//
+// SOCKET_URL: In dev, Vite proxy handles routing; in prod, same origin is used.
+// =============================================================================
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
+// Empty string means "same origin" — works in production where frontend is
+// served by the same Express server. In dev, Vite proxy forwards /socket.io.
 const SOCKET_URL = import.meta.env.VITE_API_URL || '';
 
 export default function useSocket() {

@@ -1,3 +1,8 @@
+// =============================================================================
+// TypingIndicator.jsx — Shows animated dots and names of users currently typing.
+// Filters out the current user's own typing events. Handles 1, 2, or N typers.
+// =============================================================================
+
 import { useChat } from '../context/ChatContext';
 
 export default function TypingIndicator() {

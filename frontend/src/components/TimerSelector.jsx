@@ -1,3 +1,9 @@
+// =============================================================================
+// TimerSelector.jsx — Horizontal row of TTL (time-to-live) option buttons.
+// Lets users pick how long their messages survive before auto-deletion.
+// Options: After seen, 5s, 15s, 30s, 1m, 5m.
+// =============================================================================
+
 import { Timer } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 

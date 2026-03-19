@@ -1,3 +1,10 @@
+// =============================================================================
+// index.js — Ghost Chat server entry point.
+// Sets up Express for HTTP, Socket.IO for real-time WebSocket communication,
+// and connects to Redis (shared with 2goi) for ephemeral storage.
+// In production, also serves the Vite-built React frontend as static files.
+// =============================================================================
+
 require('dotenv').config();
 
 const express = require('express');
@@ -22,6 +29,9 @@ const {
   handleTypingStart,
   handleTypingStop,
   handleDeleteMessage,
+  handlePanicDelete,
+  handleVisibilityChange,
+  handleScreenshotWarning,
 } = require('./socket/handlers');
 
 const app = express();
@@ -85,10 +95,15 @@ io.on('connection', async (socket) => {
   socket.on('message-delivered', (data) => handleMessageDelivered(socket, io, data));
   socket.on('message-read', (data) => handleMessageRead(socket, io, data));
   socket.on('delete-message', (data) => handleDeleteMessage(socket, io, data));
+  socket.on('panic-delete', (data) => handlePanicDelete(socket, io, data));
 
   // Typing events
   socket.on('typing-start', (data) => handleTypingStart(socket, io, data));
   socket.on('typing-stop', (data) => handleTypingStop(socket, io, data));
+
+  // Awareness events (tab visibility, screenshot detection)
+  socket.on('visibility-change', (data) => handleVisibilityChange(socket, io, data));
+  socket.on('screenshot-warning', (data) => handleScreenshotWarning(socket, io, data));
 
   // Disconnect
   socket.on('disconnect', async () => {

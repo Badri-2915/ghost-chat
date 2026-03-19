@@ -1,3 +1,9 @@
+// =============================================================================
+// UserList.jsx — Sidebar component showing all online users in the room.
+// Highlights the current user with "(you)" and shows a crown for the creator.
+// Green dot indicates online presence.
+// =============================================================================
+
 import { Users, Crown, Circle } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 

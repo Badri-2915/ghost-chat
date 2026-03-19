@@ -1,3 +1,10 @@
+// =============================================================================
+// JoinRequests.jsx — Sidebar component visible only to the room creator.
+// Lists pending join requests with Accept/Reject buttons.
+// Also works alongside ToastContainer which shows inline toast notifications
+// for new join requests with quick-action buttons.
+// =============================================================================
+
 import { UserPlus, Check, X } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 

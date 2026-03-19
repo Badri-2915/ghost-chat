@@ -79,4 +79,14 @@
 
   .typing-dot:nth-child(2) { animation-delay: 0.2s; }
   .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  /* Toast slide-in animation */
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-12px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .animate-slide-in {
+    animation: slideIn 0.25s ease-out;
+  }
 }

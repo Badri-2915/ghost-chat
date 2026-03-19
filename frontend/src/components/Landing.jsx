@@ -1,3 +1,10 @@
+// =============================================================================
+// Landing.jsx — Entry screen for Ghost Chat.
+// Users choose between "Create Room" or "Join Room", then enter their display
+// name (and room code for joining). Shows connection status, errors, and
+// feature highlights (E2EE, auto-delete, no data stored).
+// =============================================================================
+
 import { useState } from 'react';
 import { useChat } from '../context/ChatContext';
 import { Ghost, ArrowRight, Plus, LogIn, Shield, Timer, Lock } from 'lucide-react';
