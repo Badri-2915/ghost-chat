@@ -1,23 +1,75 @@
-# Ghost Chat — Privacy-First Real-Time Messaging
+# Ghost Chat — Privacy-First Ephemeral Messaging
 
-A privacy-focused, real-time chat application that enables users to communicate instantly without creating accounts, while minimizing stored data and ensuring messages automatically disappear.
+A real-time, end-to-end encrypted chat application with self-destructing messages. No sign-up, no database, no persistent data. Create a room, share the code, and chat — messages vanish automatically.
 
 **Live:** [https://badri.online](https://badri.online)
+
+```
+https://badri.online          Landing page (Create / Join room)
+https://badri.online          Chat room (after joining)
+https://badri.online/api/health  Health check endpoint
+```
+
+---
+
+## Architecture
+
+```
+User (Browser)
+     |
+     v
+React SPA (Vite + TailwindCSS)
+     |
+     v (WebSocket)
+Socket.IO Client ←→ Socket.IO Server (Node.js + Express)
+                            |
+                            +── Room management (create/join/approve/reject)
+                            +── Message relay (encrypted payloads)
+                            +── Typing indicators
+                            +── Delivery & read receipts
+                            +── Panic delete (wipe all messages)
+                            +── Visibility & screenshot detection
+                            |
+                            v
+                     Redis (gc: prefix)
+                            +── Room state (TTL)
+                            +── User presence
+                            +── Join requests
+                            +── Message metadata (TTL auto-expire)
+                            +── Rate limiting counters
+```
+
+```
+Message Flow:
+
+Sender → encrypt(AES-GCM, roomKey) → Socket.IO emit → Server relay → Socket.IO broadcast
+                                                                           ↓
+Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members receive
+                                                                           ↓
+                                                              Auto-delete after TTL expires
+```
 
 ---
 
 ## Features
 
-- **Room-Based Chat** — Create or join rooms with secret codes
-- **Controlled Access** — Room creator approves/rejects join requests
-- **Real-Time Messaging** — Instant delivery via WebSockets (Socket.IO)
-- **End-to-End Encryption** — AES-GCM encryption using Web Crypto API
-- **Ephemeral Messages** — Auto-delete after: seen, 5s, 15s, 30s, 1m, or 5m
-- **Typing Indicators** — See when others are typing
-- **Read Receipts** — Sent → Delivered → Read status
-- **Presence System** — See who's online in the room
-- **Rate Limiting** — Protection against spam and abuse
-- **No Data Storage** — No accounts, no databases, no persistent logs
+| Feature | Description |
+|---------|-------------|
+| **Room-Based Chat** | Create or join rooms with 8-char secret codes |
+| **Controlled Access** | Room creator approves/rejects join requests |
+| **Real-Time Messaging** | Instant delivery via WebSockets (Socket.IO) |
+| **End-to-End Encryption** | AES-GCM encryption with room-derived key (PBKDF2) |
+| **Ephemeral Messages** | Auto-delete: after seen, 5s, 15s, 30s, 1m, or 5m |
+| **Reply Feature** | Swipe-to-reply (touch), long-press menu (Copy/Reply/Delete) |
+| **Panic Button** | Instantly wipe all messages for all users in the room |
+| **Toast Notifications** | Join requests with inline Accept/Reject buttons |
+| **Typing Indicators** | See who's typing in real time |
+| **Read Receipts** | Sent → Delivered → Read status tracking |
+| **Presence System** | Online users list with creator badge |
+| **Tab Detection** | Notifies room when a user switches tabs |
+| **Screenshot Awareness** | Best-effort detection warns room members |
+| **Rate Limiting** | Per-user message limits + per-IP connection limits |
+| **No Data Storage** | No accounts, no databases, no persistent logs |
 
 ---
 
@@ -25,12 +77,64 @@ A privacy-focused, real-time chat application that enables users to communicate 
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React + Vite + TailwindCSS |
-| Backend | Node.js + Express + Socket.IO |
-| Realtime & Cache | Redis (Pub/Sub, TTL, Presence) |
-| Encryption | Web Crypto API (ECDH + AES-GCM) |
-| Deployment | Render (backend + Redis) |
-| Domain | badri.online |
+| Frontend | React 18 + Vite 5 + TailwindCSS 3 |
+| UI Icons | Lucide React |
+| Backend | Node.js + Express + Socket.IO 4 |
+| State & Cache | Redis (shared instance, `gc:` prefix, TTL-based) |
+| Encryption | Web Crypto API (ECDH key exchange + AES-GCM + PBKDF2) |
+| ID Generation | nanoid v3 (room codes) + uuid v9 (message IDs) |
+| Hosting | Render (Docker, free tier) |
+| Monitoring | UptimeRobot (5-min health pings) |
+| Domain | badri.online (GoDaddy) |
+| SEO | Google Search Console + sitemap.xml + robots.txt |
+
+---
+
+## Project Structure
+
+```
+ghost-chat/
+├── render.yaml                          # Render Blueprint (web service + Redis)
+├── Dockerfile                           # Multi-stage: Node builds frontend → serves with backend
+├── docker-compose.yml                   # Local dev: backend + Redis
+├── backend/
+│   ├── src/
+│   │   ├── index.js                     # Express + Socket.IO server, event registration
+│   │   ├── redis.js                     # Redis client, gc: prefix, in-memory fallback
+│   │   ├── rateLimiter.js               # Per-user message + per-IP connection limits
+│   │   └── socket/
+│   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect
+│   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
+│   ├── static/                          # Built frontend (production)
+│   ├── test.js                          # 34 feature tests
+│   └── test-comprehensive.js            # 126 comprehensive tests (160 total)
+├── frontend/
+│   ├── public/
+│   │   ├── sitemap.xml                  # SEO sitemap for Google
+│   │   └── robots.txt                   # Crawler instructions
+│   ├── src/
+│   │   ├── App.jsx                      # Root: Landing → WaitingRoom → ChatRoom
+│   │   ├── main.jsx                     # React entry point
+│   │   ├── index.css                    # Tailwind + custom animations
+│   │   ├── context/
+│   │   │   └── ChatContext.jsx          # All state + socket events + actions
+│   │   ├── hooks/
+│   │   │   └── useSocket.js             # Socket.IO connection hook
+│   │   ├── crypto/
+│   │   │   └── encryption.js            # ECDH, AES-GCM, PBKDF2 key derivation
+│   │   └── components/
+│   │       ├── Landing.jsx              # Create/Join room screen
+│   │       ├── WaitingRoom.jsx          # Pending approval screen
+│   │       ├── ChatRoom.jsx             # Main chat UI + panic button + reply bar
+│   │       ├── MessageBubble.jsx        # Message display + swipe + long-press menu
+│   │       ├── ToastContainer.jsx       # Toast notifications (join requests, alerts)
+│   │       ├── TypingIndicator.jsx      # "X is typing..." display
+│   │       ├── TimerSelector.jsx        # TTL picker (after seen, 5s, 15s, etc.)
+│   │       ├── UserList.jsx             # Online users sidebar
+│   │       └── JoinRequests.jsx         # Pending join requests sidebar
+│   └── index.html                       # SEO meta tags, Open Graph, Twitter Card
+└── docs/                                # (local) Project report + interview prep
+```
 
 ---
 
@@ -43,102 +147,199 @@ A privacy-focused, real-time chat application that enables users to communicate 
 ### Quick Start
 
 ```bash
-# Clone the repo
+# 1. Clone
 git clone https://github.com/Badri-2915/ghost-chat.git
 cd ghost-chat
 
-# Backend
-cd backend
-cp .env.example .env
-npm install
-npm run dev
+# 2. Start Redis
+docker run -d --name redis -p 6379:6379 redis:7-alpine
 
-# Frontend (new terminal)
+# 3. Backend
+cd backend
+cp .env.example .env    # Edit REDIS_URL if needed
+npm install
+npm run dev             # Runs on http://localhost:3001
+
+# 4. Frontend (new terminal)
 cd frontend
 cp .env.example .env
 npm install
-npm run dev
+npm run dev             # Runs on http://localhost:5173 (proxies to backend)
+```
+
+### Single-Origin Local Test
+
+```bash
+cd frontend && npm run build
+cp -r dist ../backend/static
+# Now http://localhost:3001 serves everything (like production)
 ```
 
 ### Using Docker
 
 ```bash
-docker-compose up
-# Frontend: cd frontend && npm run dev
+docker-compose up       # Backend + Redis
+cd frontend && npm run dev   # Frontend dev server
 ```
-
-App runs at: `http://localhost:5173`
 
 ---
 
-## Deployment
+## Testing
 
-### Render (Free Tier)
+```bash
+# Start server first, then:
+cd backend
 
-1. Push to GitHub: `https://github.com/Badri-2915`
-2. Render Dashboard → New + → Blueprint → Connect repo
-3. Render reads `render.yaml` and creates services automatically
-4. Add custom domain `badri.online` in Render settings
-5. Configure DNS records in GoDaddy as provided by Render
+# Original feature tests (34 tests)
+node test.js
 
-### UptimeRobot (Keep Alive)
+# Comprehensive test suite (126 tests)
+node test-comprehensive.js
 
-Render free tier sleeps after 15min inactivity.
+# Both suites: 160 total tests, 0 failures
+```
 
-1. Create account at [uptimerobot.com](https://uptimerobot.com)
-2. Add HTTP(s) monitor: `https://badri.online/api/health`
-3. Interval: 5 minutes
+### Test Coverage
+
+| Suite | Tests | Categories |
+|-------|-------|------------|
+| `test.js` | 34 | Health, rooms, join flow, messaging, typing, presence, deletion |
+| `test-comprehensive.js` | 126 | Health, room creation, join requests, messaging, reply, deletion, panic delete, typing, presence, rate limiting, visibility, screenshot, edge cases, concurrency |
+| **Total** | **160** | **13 categories** |
 
 ---
 
-## Architecture
+## Socket.IO Events
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `create-room` | Client → Server | Create a new chat room |
+| `room-created` | Server → Client | Room created with code + userId |
+| `join-request` | Client → Server | Request to join a room |
+| `join-requested` | Server → Client | Acknowledgment of join request |
+| `join-requests-updated` | Server → Creator | New pending join request |
+| `approve-join` / `reject-join` | Creator → Server | Accept/reject join request |
+| `join-approved` / `join-rejected` | Server → Joiner | Result of join request |
+| `send-message` | Client → Server | Send encrypted message (+ optional replyTo) |
+| `new-message` | Server → Room | Broadcast message to all room members |
+| `delete-message` | Client → Server | Delete a specific message |
+| `message-deleted` | Server → Room | Message deleted notification |
+| `panic-delete` | Client → Server | Wipe all messages in room |
+| `panic-delete` | Server → Room | All messages wiped notification |
+| `typing-start` / `typing-stop` | Client → Server | Typing indicator |
+| `user-typing` / `user-stopped-typing` | Server → Room | Typing broadcast |
+| `message-delivered` / `message-read` | Client → Server | Delivery/read receipt |
+| `message-status-update` | Server → Sender | Status update (delivered/read) |
+| `visibility-change` | Client → Server | Tab visible/hidden |
+| `user-visibility-changed` | Server → Room | User visibility broadcast |
+| `screenshot-warning` | Client → Server | Screenshot detected |
+| `screenshot-warning` | Server → Room | Screenshot warning broadcast |
+| `users-updated` | Server → Room | Online users list changed |
+| `user-left` | Server → Room | User disconnected |
+| `error-message` | Server → Client | Error notification |
+
+---
+
+## Encryption Design
 
 ```
-Client (React) → WebSocket (Socket.IO) → Node.js Server (Express) → Redis
-                                                                      ├── Pub/Sub
-                                                                      ├── TTL (auto-delete)
-                                                                      ├── Presence tracking
-                                                                      └── Rate limiting
+Room Creation:
+  roomCode (8 chars) → PBKDF2 → roomKey (AES-256)
+
+Sending a Message:
+  plaintext → AES-GCM encrypt(roomKey, random IV) → { iv, ciphertext } → Socket.IO emit
+
+Receiving a Message:
+  { iv, ciphertext } → AES-GCM decrypt(roomKey, iv) → plaintext
+
+Key Exchange (future):
+  Each user generates ECDH key pair → exchange public keys → derive shared secret
 ```
+
+- Server **never** sees plaintext — only relays encrypted payloads
+- Room key derived from room code via PBKDF2 (256-bit, 100K iterations)
+- Each message encrypted with a fresh random IV (96-bit)
 
 ---
 
 ## Security & Privacy
 
 ### What this system does:
-- Encrypts messages on the client side (AES-GCM)
-- Server only relays encrypted data
-- No permanent message storage
-- No user accounts or personal data collection
-- Messages auto-delete from all locations
+- Encrypts messages client-side (AES-GCM) before sending
+- Server only relays opaque encrypted data
+- No permanent message storage — Redis TTL auto-expires everything
+- No user accounts, no emails, no personal data
+- Messages auto-delete from all clients and server
+- Rate limiting prevents spam and abuse
+- Tab detection warns when users switch away
+- Screenshot detection (best-effort) warns room members
 
 ### Honest Limitations:
-- Cannot prevent network-level metadata visibility (IP by ISP/hosting)
-- Cannot fully prevent screenshots
-- Messages are permanently lost after deletion
-- Requires trust in client-side encryption
+- Cannot prevent network-level metadata visibility (IP addresses)
+- Cannot fully prevent screenshots on all devices
+- Messages are permanently lost after deletion (by design)
+- Room key is derived from room code — anyone with the code can decrypt
+- Requires trust in client-side encryption implementation
 
-> This system is designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity.
+> Designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity.
 
 ---
 
-## Cost
+## Production Deployment (Render)
 
-| Service | Cost |
-|---------|------|
-| Render (backend) | ₹0 |
-| Redis | ₹0 |
-| UptimeRobot | ₹0 |
-| Domain (badri.online) | Already purchased |
-| **Total** | **₹0/month** |
+1. Push repo to GitHub
+2. Go to [render.com](https://render.com) → **New +** → **Blueprint**
+3. Connect your repo → Render reads `render.yaml`
+4. Fill in environment variables (REDIS_URL is auto-set by the blueprint)
+5. Deploy → get `https://ghost-chat-broc.onrender.com`
+6. **Settings → Custom Domains** → add `badri.online`
+7. Add DNS records on GoDaddy as shown by Render
+8. Set up UptimeRobot: `https://badri.online/api/health` every 5 minutes
+
+See [SETUP_GUIDE.md](./SETUP_GUIDE.md) for detailed step-by-step instructions.
 
 ---
 
 ## API
 
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check (status, connections, uptime) |
+
+```bash
+curl https://badri.online/api/health
 ```
-GET /api/health → { "status": "ok", "connections": 0, "uptime": 123.45 }
+```json
+{
+  "status": "ok",
+  "connections": 3,
+  "uptime": 12345.67
+}
 ```
+
+---
+
+## Monthly Cost
+
+| Service | Cost |
+|---------|------|
+| Render (web service) | ₹0 (free tier) |
+| Render (Redis) | ₹0 (free tier, shared with 2goi.in) |
+| UptimeRobot | ₹0 (free, 50 monitors) |
+| Google Search Console | ₹0 |
+| Domain (badri.online) | Already purchased |
+| **Total** | **₹0/month** |
+
+---
+
+## Documentation
+
+| Document | Location | Description |
+|----------|----------|-------------|
+| [README.md](./README.md) | GitHub | This file — overview, setup, architecture |
+| [SETUP_GUIDE.md](./SETUP_GUIDE.md) | GitHub | Step-by-step deployment guide |
+| `docs/PROJECT-REPORT.md` | Local only | Complete project report (~200 pages) |
+| `docs/INTERVIEW-PREP.md` | Local only | Interview preparation document (40 sections) |
 
 ---
 
