@@ -158,6 +158,29 @@ async function handleRejectJoin(socket, io, { roomCode, userId }) {
 }
 
 // ---------------------------------------------------------------------------
+// Rejoin room: user reconnects after a disconnect (same userId, new socket)
+// ---------------------------------------------------------------------------
+async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
+  const room = await getRoom(roomCode);
+  if (!room) {
+    socket.emit('error-message', { message: 'Room no longer exists' });
+    return;
+  }
+
+  // Register the new socket with the existing userId
+  socket.join(roomCode);
+  socketUsers.set(socket.id, { roomId: roomCode, userId, username });
+
+  // Re-add user to presence (may already exist if disconnect cleanup was slow)
+  await addUserToRoom(roomCode, userId, username);
+  await refreshRoomTTL(roomCode);
+
+  const users = await getRoomUsers(roomCode);
+  io.to(roomCode).emit('users-updated', { users, creator: room.creator });
+  io.to(roomCode).emit('user-rejoined', { userId, username });
+}
+
+// ---------------------------------------------------------------------------
 // Disconnect cleanup: remove user from room, notify remaining members
 // ---------------------------------------------------------------------------
 async function handleDisconnect(socket, io) {
@@ -196,6 +219,7 @@ module.exports = {
   handleJoinRequest,
   handleApproveJoin,
   handleRejectJoin,
+  handleRejoinRoom,
   handleDisconnect,
   getSocketUser,
   socketUsers,

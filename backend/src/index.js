@@ -20,6 +20,7 @@ const {
   handleJoinRequest,
   handleApproveJoin,
   handleRejectJoin,
+  handleRejoinRoom,
   handleDisconnect,
 } = require('./socket/rooms');
 const {
@@ -89,6 +90,7 @@ io.on('connection', async (socket) => {
   socket.on('join-request', (data) => handleJoinRequest(socket, io, data));
   socket.on('approve-join', (data) => handleApproveJoin(socket, io, data));
   socket.on('reject-join', (data) => handleRejectJoin(socket, io, data));
+  socket.on('rejoin-room', (data) => handleRejoinRoom(socket, io, data));
 
   // Message events
   socket.on('send-message', (data) => handleSendMessage(socket, io, data));

@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Copy, Ghost, Wifi, WifiOff, Users, X, Shield, AlertTriangle, Bomb, Reply, LogOut, ChevronDown, Timer } from 'lucide-react';
+import { Send, Copy, Ghost, Wifi, WifiOff, Users, X, Shield, AlertTriangle, Bomb, Reply, LogOut, ChevronDown, Timer, Share2 } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 import MessageBubble from './MessageBubble';
 import TypingIndicator from './TypingIndicator';
@@ -41,6 +41,7 @@ export default function ChatRoom() {
   const [confirmPanic, setConfirmPanic] = useState(false);
   const [showTimerPicker, setShowTimerPicker] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
+  const [newMsgCount, setNewMsgCount] = useState(0);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -52,15 +53,21 @@ export default function ChatRoom() {
   useEffect(() => {
     if (atBottom) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setNewMsgCount(0);
+    } else if (messages.length > 0) {
+      setNewMsgCount((prev) => prev + 1);
     }
-  }, [messages, atBottom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
 
   // Track if user is scrolled to bottom
   const handleScroll = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
     const threshold = 80;
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < threshold);
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    setAtBottom(isAtBottom);
+    if (isAtBottom) setNewMsgCount(0);
   }, []);
 
   // Focus input when reply is set
@@ -71,6 +78,7 @@ export default function ChatRoom() {
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     setAtBottom(true);
+    setNewMsgCount(0);
   }, []);
 
   const handleSend = useCallback(
@@ -105,6 +113,26 @@ export default function ChatRoom() {
     navigator.clipboard.writeText(roomCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }, [roomCode]);
+
+  const shareRoomCode = useCallback(async () => {
+    const shareData = {
+      title: 'Ghost Chat',
+      text: `Join my Ghost Chat room! Code: ${roomCode}`,
+      url: window.location.origin,
+    };
+    try {
+      if (navigator.share && navigator.canShare?.(shareData)) {
+        await navigator.share(shareData);
+      } else {
+        // Fallback: copy to clipboard
+        await navigator.clipboard.writeText(`Join my Ghost Chat room! Code: ${roomCode} — ${window.location.origin}`);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    } catch (e) {
+      // User cancelled share or error
+    }
   }, [roomCode]);
 
   const handlePanicDelete = useCallback(() => {
@@ -239,13 +267,17 @@ export default function ChatRoom() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Scroll-to-bottom button (when not at bottom) */}
+          {/* Scroll-to-bottom / New messages indicator */}
           {!atBottom && messages.length > 0 && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-28 left-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-ghost-600/80 backdrop-blur-sm flex items-center justify-center shadow-lg hover:bg-ghost-600 transition-colors z-10"
+              className="absolute bottom-28 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ghost-600/90 backdrop-blur-sm shadow-lg hover:bg-ghost-600 transition-colors z-10 text-xs font-medium"
             >
-              <ChevronDown className="w-4 h-4" />
+              {newMsgCount > 0 ? (
+                <>{newMsgCount} new {newMsgCount === 1 ? 'message' : 'messages'} <ChevronDown className="w-3.5 h-3.5" /></>
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5" />
+              )}
             </button>
           )}
 
@@ -328,11 +360,26 @@ export default function ChatRoom() {
 
                 {/* Room details */}
                 <div className="space-y-2 p-3 rounded-xl bg-white/5">
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="text-xs space-y-1.5">
                     <span className="text-white/40">Room Code</span>
-                    <button onClick={copyRoomCode} className="font-mono text-ghost-400 hover:text-ghost-300 transition-colors">
-                      {roomCode}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-lg text-ghost-300 tracking-wider flex-1">{roomCode}</span>
+                      <button
+                        onClick={copyRoomCode}
+                        className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
+                        title="Copy code"
+                      >
+                        <Copy className="w-3.5 h-3.5 text-white/50" />
+                      </button>
+                      <button
+                        onClick={shareRoomCode}
+                        className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
+                        title="Share room"
+                      >
+                        <Share2 className="w-3.5 h-3.5 text-white/50" />
+                      </button>
+                    </div>
+                    {copied && <span className="text-green-400 text-[10px] font-medium">Copied!</span>}
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-white/40">You</span>

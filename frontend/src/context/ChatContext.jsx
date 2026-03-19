@@ -178,6 +178,12 @@ export function ChatProvider({ children }) {
         addToast(`${leftName} left the room`, 'info', 3000);
       },
 
+      'user-rejoined': ({ userId: rejoinId, username: rejoinName }) => {
+        if (rejoinId !== userId) {
+          addToast(`${rejoinName} rejoined the room`, 'info', 3000);
+        }
+      },
+
       // Visibility awareness: another user switched tabs
       'user-visibility-changed': ({ userId: uid, username: uname, isVisible }) => {
         setUserVisibility((prev) => ({ ...prev, [uid]: isVisible }));
@@ -212,6 +218,24 @@ export function ChatProvider({ children }) {
       }
     };
   }, [socket, on, off, emit, roomCode, userId, addToast]);
+
+  // ---- Reconnect recovery ----
+  // When socket reconnects and user was in a chat, re-register with the room
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleReconnect = () => {
+      if (screen === 'chat' && roomCode && userId && username) {
+        emit('rejoin-room', { roomCode, userId, username });
+        console.log('[Reconnect] Rejoining room:', roomCode);
+      }
+    };
+
+    socket.io.on('reconnect', handleReconnect);
+    return () => {
+      socket.io.off('reconnect', handleReconnect);
+    };
+  }, [socket, screen, roomCode, userId, username, emit]);
 
   // ---- Tab visibility detection ----
   // Listens to document.visibilitychange and notifies the room when user
