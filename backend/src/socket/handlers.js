@@ -4,7 +4,7 @@
 // =============================================================================
 
 const { v4: uuidv4 } = require('uuid');
-const { storeMessage, deleteMessage, refreshRoomTTL } = require('../redis');
+const { storeMessage, deleteMessage, refreshRoomTTL, bufferMissedMessage, getRoomUsers } = require('../redis');
 const { rateLimitMessage } = require('../rateLimiter');
 const { getSocketUser } = require('./rooms');
 
@@ -30,7 +30,7 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, 
 
   // TTL mapping: user-selected lifetime → seconds for Redis expiry
   const ttlMap = {
-    'after-seen': 10,     // 10s buffer after seen
+    'after-seen': 3,      // 3s buffer after seen
     '5s': 5,
     '15s': 15,
     '30s': 30,
@@ -64,8 +64,26 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, 
     replyTo: replyTo || null,
   };
 
-  // Broadcast to all users in the room
+  // Broadcast to all connected users in the room
   io.to(roomCode).emit('new-message', messageData);
+
+  // Buffer message for offline (disconnected) room members
+  try {
+    const roomUsers = await getRoomUsers(roomCode);
+    const connectedSockets = await io.in(roomCode).fetchSockets();
+    const connectedUserIds = new Set();
+    for (const s of connectedSockets) {
+      const u = getSocketUser(s.id);
+      if (u) connectedUserIds.add(u.userId);
+    }
+    for (const uid of Object.keys(roomUsers)) {
+      if (!connectedUserIds.has(uid)) {
+        await bufferMissedMessage(roomCode, uid, messageData);
+      }
+    }
+  } catch (e) {
+    // Non-critical — best effort buffering
+  }
 }
 
 // ---------------------------------------------------------------------------

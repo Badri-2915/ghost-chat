@@ -109,31 +109,32 @@ export default function ChatRoom() {
     [startTyping, stopTyping]
   );
 
+  const roomLink = `${window.location.origin}/r/${roomCode}`;
+
   const copyRoomCode = useCallback(() => {
-    navigator.clipboard.writeText(roomCode);
+    navigator.clipboard.writeText(roomLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [roomCode]);
+  }, [roomLink]);
 
   const shareRoomCode = useCallback(async () => {
+    const shareText = `Join my Ghost Chat room!\n\n${roomLink}`;
     const shareData = {
-      title: 'Ghost Chat',
-      text: `Join my Ghost Chat room! Code: ${roomCode}`,
-      url: window.location.origin,
+      title: 'Ghost Chat — Join My Room',
+      text: shareText,
     };
     try {
       if (navigator.share && navigator.canShare?.(shareData)) {
         await navigator.share(shareData);
       } else {
-        // Fallback: copy to clipboard
-        await navigator.clipboard.writeText(`Join my Ghost Chat room! Code: ${roomCode} — ${window.location.origin}`);
+        await navigator.clipboard.writeText(shareText);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }
     } catch (e) {
       // User cancelled share or error
     }
-  }, [roomCode]);
+  }, [roomLink]);
 
   const handlePanicDelete = useCallback(() => {
     if (!confirmPanic) {

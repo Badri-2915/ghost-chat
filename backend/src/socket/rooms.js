@@ -11,6 +11,7 @@ const { nanoid } = require('nanoid');
 const {
   createRoom,
   getRoom,
+  updateRoomCreator,
   addUserToRoom,
   removeUserFromRoom,
   getRoomUsers,
@@ -18,6 +19,7 @@ const {
   removeJoinRequest,
   getJoinRequests,
   refreshRoomTTL,
+  getMissedMessages,
 } = require('../redis');
 
 // In-memory map: socketId -> { roomId, userId, username, pending }
@@ -69,6 +71,33 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
     return;
   }
 
+  // Check if this is the room creator rejoining (match by creatorName)
+  const isCreatorRejoin = room.creatorName === username;
+
+  if (isCreatorRejoin) {
+    // Auto-approve creator — no waiting
+    const userId = generateUserId();
+    const oldCreatorId = room.creator;
+    socket.join(roomCode);
+    socketUsers.set(socket.id, { roomId: roomCode, userId, username });
+    await addUserToRoom(roomCode, userId, username);
+    await updateRoomCreator(roomCode, userId);
+    await refreshRoomTTL(roomCode);
+
+    socket.emit('join-approved', { roomCode, userId, username, isCreator: true, creatorId: userId });
+
+    const users = await getRoomUsers(roomCode);
+    io.to(roomCode).emit('users-updated', { users, creator: userId });
+    io.to(roomCode).emit('user-rejoined', { userId, username });
+
+    // Deliver missed messages (buffered under old creator userId)
+    try {
+      const missed = await getMissedMessages(roomCode, oldCreatorId);
+      for (const msg of missed) socket.emit('new-message', msg);
+    } catch (e) { /* best effort */ }
+    return;
+  }
+
   const userId = generateUserId();
   socketUsers.set(socket.id, { roomId: roomCode, userId, username, pending: true });
 
@@ -115,7 +144,7 @@ async function handleApproveJoin(socket, io, { roomCode, userId }) {
       pendingSocket.join(roomCode);
       const userState = socketUsers.get(pendingSocketId);
       if (userState) userState.pending = false;
-      pendingSocket.emit('join-approved', { roomCode, userId, username: requestData.username });
+      pendingSocket.emit('join-approved', { roomCode, userId, username: requestData.username, creatorId: room.creator });
     }
   }
 
@@ -178,6 +207,12 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
   const users = await getRoomUsers(roomCode);
   io.to(roomCode).emit('users-updated', { users, creator: room.creator });
   io.to(roomCode).emit('user-rejoined', { userId, username });
+
+  // Deliver missed messages for this user
+  try {
+    const missed = await getMissedMessages(roomCode, userId);
+    for (const msg of missed) socket.emit('new-message', msg);
+  } catch (e) { /* best effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +227,10 @@ async function handleDisconnect(socket, io) {
 
   if (userData.pending) return;
 
-  await removeUserFromRoom(roomId, userId);
+  // Do NOT remove from Redis room users — keep for offline message buffering.
+  // The user stays in getRoomUsers() so messages sent while they're offline
+  // get buffered. On rejoin, addUserToRoom() refreshes their entry.
+  // Room TTL (6h) auto-cleans stale users.
   const users = await getRoomUsers(roomId);
   const roomData = await getRoom(roomId);
   io.to(roomId).emit('users-updated', { users, creator: roomData?.creator });
@@ -214,6 +252,31 @@ function getSocketUser(socketId) {
   return socketUsers.get(socketId);
 }
 
+// ---------------------------------------------------------------------------
+// User activity state: track inactive (tab switched) vs active
+// ---------------------------------------------------------------------------
+function handleUserInactive(socket, io) {
+  const userData = socketUsers.get(socket.id);
+  if (!userData || userData.pending) return;
+  userData.inactive = true;
+  socket.to(userData.roomId).emit('user-state-changed', {
+    userId: userData.userId,
+    username: userData.username,
+    state: 'inactive',
+  });
+}
+
+function handleUserActive(socket, io) {
+  const userData = socketUsers.get(socket.id);
+  if (!userData || userData.pending) return;
+  userData.inactive = false;
+  socket.to(userData.roomId).emit('user-state-changed', {
+    userId: userData.userId,
+    username: userData.username,
+    state: 'active',
+  });
+}
+
 module.exports = {
   handleCreateRoom,
   handleJoinRequest,
@@ -221,6 +284,8 @@ module.exports = {
   handleRejectJoin,
   handleRejoinRoom,
   handleDisconnect,
+  handleUserInactive,
+  handleUserActive,
   getSocketUser,
   socketUsers,
 };

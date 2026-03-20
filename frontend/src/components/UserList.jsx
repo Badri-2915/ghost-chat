@@ -8,7 +8,7 @@ import { Users, Crown, Circle } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 
 export default function UserList() {
-  const { users, userId, creatorId } = useChat();
+  const { users, userId, creatorId, userStates } = useChat();
 
   const userEntries = Object.entries(users);
 
@@ -21,6 +21,7 @@ export default function UserList() {
       <div className="space-y-1">
         {userEntries.map(([id, data]) => {
           const name = typeof data === 'string' ? data : data.username || 'Unknown';
+          const isInactive = userStates[id] === 'inactive';
           return (
             <div
               key={id}
@@ -28,8 +29,15 @@ export default function UserList() {
                 id === userId ? 'bg-ghost-600/15 text-ghost-300' : 'text-white/70'
               }`}
             >
-              <Circle className="w-2 h-2 fill-green-400 text-green-400 shrink-0" />
-              <span className="truncate">{name}</span>
+              <Circle className={`w-2 h-2 shrink-0 ${
+                isInactive
+                  ? 'fill-white/20 text-white/20'
+                  : 'fill-green-400 text-green-400'
+              }`} />
+              <span className={`truncate ${isInactive ? 'opacity-50' : ''}`}>{name}</span>
+              {isInactive && (
+                <span className="text-[10px] text-white/20 italic">inactive</span>
+              )}
               {id === creatorId && (
                 <Crown className="w-3 h-3 text-yellow-400 shrink-0" />
               )}

@@ -22,6 +22,8 @@ const {
   handleRejectJoin,
   handleRejoinRoom,
   handleDisconnect,
+  handleUserInactive,
+  handleUserActive,
 } = require('./socket/rooms');
 const {
   handleSendMessage,
@@ -106,6 +108,10 @@ io.on('connection', async (socket) => {
   // Awareness events (tab visibility, screenshot detection)
   socket.on('visibility-change', (data) => handleVisibilityChange(socket, io, data));
   socket.on('screenshot-warning', (data) => handleScreenshotWarning(socket, io, data));
+
+  // User activity state (3-state: active / inactive / offline)
+  socket.on('user_inactive', () => handleUserInactive(socket, io));
+  socket.on('user_active', () => handleUserActive(socket, io));
 
   // Disconnect
   socket.on('disconnect', async () => {

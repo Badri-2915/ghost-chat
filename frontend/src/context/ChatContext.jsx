@@ -33,6 +33,7 @@ export function ChatProvider({ children }) {
   const [replyTo, setReplyTo] = useState(null);          // message being replied to
   const [toasts, setToasts] = useState([]);               // toast notification queue
   const [userVisibility, setUserVisibility] = useState({}); // userId -> isVisible
+  const [userStates, setUserStates] = useState({});           // userId -> 'active'|'inactive'
   const [screenshotAlerts, setScreenshotAlerts] = useState([]); // screenshot warnings
 
   const roomKeyRef = useRef(null);
@@ -80,7 +81,12 @@ export function ChatProvider({ children }) {
         setScreen('waiting');
       },
 
-      'join-approved': () => {
+      'join-approved': (data) => {
+        if (data?.userId) setUserId(data.userId);
+        if (data?.username) setUsername(data.username);
+        if (data?.roomCode) setRoomCode(data.roomCode);
+        if (data?.isCreator) setIsCreator(true);
+        if (data?.creatorId) setCreatorId(data.creatorId);
         setScreen('chat');
       },
 
@@ -133,7 +139,10 @@ export function ChatProvider({ children }) {
           receivedAt: Date.now(),
         };
 
-        setMessages((prev) => [...prev, msg]);
+        setMessages((prev) => {
+          if (prev.some((m) => m.messageId === msg.messageId)) return prev;
+          return [...prev, msg];
+        });
 
         // Send delivered receipt (if not own message)
         if (data.senderId !== userId) {
@@ -184,19 +193,20 @@ export function ChatProvider({ children }) {
         }
       },
 
-      // Visibility awareness: another user switched tabs
-      'user-visibility-changed': ({ userId: uid, username: uname, isVisible }) => {
+      // Visibility awareness: another user switched tabs (track silently)
+      'user-visibility-changed': ({ userId: uid, isVisible }) => {
         setUserVisibility((prev) => ({ ...prev, [uid]: isVisible }));
-        if (!isVisible) {
-          addToast(`${uname} may be inactive`, 'warning', 3000);
-        }
       },
 
-      // Screenshot awareness (best-effort)
+      // 3-state presence: active / inactive / offline
+      'user-state-changed': ({ userId: uid, username: uname, state }) => {
+        setUserStates((prev) => ({ ...prev, [uid]: state }));
+      },
+
+      // Screenshot awareness (best-effort, minimal)
       'screenshot-warning': ({ username: uname, timestamp }) => {
         setScreenshotAlerts((prev) => [...prev, { username: uname, timestamp }]);
         addToast(`${uname} may have taken a screenshot`, 'danger', 5000);
-        // Auto-clear after 10s
         setTimeout(() => {
           setScreenshotAlerts((prev) => prev.filter((a) => a.timestamp !== timestamp));
         }, 10000);
@@ -237,25 +247,27 @@ export function ChatProvider({ children }) {
     };
   }, [socket, screen, roomCode, userId, username, emit]);
 
-  // ---- Tab visibility detection ----
-  // Listens to document.visibilitychange and notifies the room when user
-  // switches away or returns. Also triggers screenshot warning on blur.
+  // ---- Tab visibility & 3-state presence ----
+  // Emits user_inactive / user_active for presence state.
+  // Also triggers screenshot warning if tab hidden < 3s (heuristic).
   useEffect(() => {
     if (!roomCode || screen !== 'chat') return;
 
     let lastHidden = 0;
 
     const handleVisibility = () => {
-      const isVisible = !document.hidden;
-      emit('visibility-change', { roomCode, isVisible });
-
       if (document.hidden) {
         lastHidden = Date.now();
+        emit('user_inactive');
       } else {
-        // If user was away for < 2 seconds, might be a screenshot shortcut
-        const awayMs = Date.now() - lastHidden;
-        if (lastHidden > 0 && awayMs < 2000) {
-          emit('screenshot-warning', { roomCode });
+        emit('user_active');
+        // Screenshot heuristic: hidden < 3s might be screenshot shortcut
+        if (lastHidden > 0) {
+          const awayMs = Date.now() - lastHidden;
+          if (awayMs < 3000) {
+            emit('screenshot-warning', { roomCode });
+          }
+          lastHidden = 0;
         }
       }
     };
@@ -409,6 +421,7 @@ export function ChatProvider({ children }) {
     dismissToast,
     creatorId,
     userVisibility,
+    userStates,
     screenshotAlerts,
   };
 

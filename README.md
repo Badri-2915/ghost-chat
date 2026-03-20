@@ -5,9 +5,9 @@ A real-time, end-to-end encrypted chat application with self-destructing message
 **Live:** [https://badri.online](https://badri.online)
 
 ```
-https://badri.online          Landing page (Create / Join room)
-https://badri.online          Chat room (after joining)
-https://badri.online/api/health  Health check endpoint
+https://badri.online              Landing page (Create / Join room)
+https://badri.online/r/ABC123     Deep link — auto-fills room code for joining
+https://badri.online/api/health   Health check endpoint
 ```
 
 ---
@@ -28,7 +28,9 @@ Socket.IO Client ←→ Socket.IO Server (Node.js + Express)
                             +── Typing indicators
                             +── Delivery & read receipts
                             +── Panic delete (wipe all messages)
+                            +── 3-state presence (active/inactive/offline)
                             +── Visibility & screenshot detection
+                            +── Offline message buffering & delivery
                             |
                             v
                      Redis (gc: prefix)
@@ -36,6 +38,7 @@ Socket.IO Client ←→ Socket.IO Server (Node.js + Express)
                             +── User presence
                             +── Join requests
                             +── Message metadata (TTL auto-expire)
+                            +── Offline message buffer (30 min TTL)
                             +── Rate limiting counters
 ```
 
@@ -59,16 +62,19 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Controlled Access** | Room creator approves/rejects join requests |
 | **Real-Time Messaging** | Instant delivery via WebSockets (Socket.IO) |
 | **End-to-End Encryption** | AES-GCM encryption with room-derived key (PBKDF2) |
-| **Ephemeral Messages** | Auto-delete: after seen, 5s, 15s, 30s, 1m, or 5m |
+| **Ephemeral Messages** | Auto-delete: after seen (3s), 5s, 15s, 30s, 1m, or 5m |
 | **Reply Feature** | Swipe-to-reply (touch), long-press menu (Copy/Reply/Delete) |
 | **Panic Button** | Instantly wipe all messages for all users in the room |
 | **Toast Notifications** | Join requests with inline Accept/Reject buttons |
 | **Typing Indicators** | See who's typing in real time |
 | **Read Receipts** | Sent → Delivered → Read status tracking |
-| **Presence System** | Online users list with creator badge (crown) |
-| **Tab Detection** | Notifies room when a user switches tabs |
-| **Screenshot Awareness** | Best-effort detection warns room members |
+| **3-State Presence** | Active (green) / Inactive (gray, tab switched) / Offline (disconnected) |
+| **Deep Link Sharing** | Share `https://badri.online/r/CODE` — auto-fills room code on open |
+| **Creator Rejoin** | Room creator auto-approved on rejoin (no waiting screen) |
+| **Offline Recovery** | Messages buffered in Redis while user is offline, delivered on rejoin |
+| **Screenshot Awareness** | Best-effort <3s heuristic warns room members |
 | **Rate Limiting** | Per-user message limits + per-IP connection limits |
+| **Message Dedup** | Duplicate messages prevented on rejoin via messageId check |
 | **Connection Handling** | Disconnect overlay, auto-reconnect, online/offline detection |
 | **Leave Room** | Clean exit with full state reset and server-side cleanup |
 | **Scroll-to-Bottom** | Smart auto-scroll + manual scroll button when reading history |
@@ -109,8 +115,7 @@ ghost-chat/
 │   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect
 │   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
 │   ├── static/                          # Built frontend (production)
-│   ├── test.js                          # 34 feature tests
-│   └── test-comprehensive.js            # 126 comprehensive tests (160 total)
+│   └── test.js                          # 48 comprehensive feature tests
 ├── frontend/
 │   ├── public/
 │   │   ├── sitemap.xml                  # SEO sitemap for Google
@@ -192,23 +197,33 @@ cd frontend && npm run dev   # Frontend dev server
 ```bash
 # Start server first, then:
 cd backend
-
-# Original feature tests (34 tests)
 node test.js
 
-# Comprehensive test suite (126 tests)
-node test-comprehensive.js
-
-# Both suites: 160 total tests, 0 failures
+# 48 tests, 0 failures
 ```
 
-### Test Coverage
+### Test Coverage (18 test groups, 48 assertions)
 
-| Suite | Tests | Categories |
-|-------|-------|------------|
-| `test.js` | 34 | Health, rooms, join flow, messaging, typing, presence, deletion |
-| `test-comprehensive.js` | 126 | Health, room creation, join requests, messaging, reply, deletion, panic delete, typing, presence, rate limiting, visibility, screenshot, edge cases, concurrency |
-| **Total** | **160** | **13 categories** |
+| Category | Tests |
+|----------|-------|
+| Health endpoint | 4 |
+| Room creation | 5 |
+| Join/approve/reject flow | 3 |
+| Real-time messaging + receipts | 7 |
+| Typing indicators | 2 |
+| Presence (disconnect/offline) | 2 |
+| Invalid room | 1 |
+| Message deletion | 1 |
+| Panic delete | 2 |
+| 3-state presence (active/inactive) | 4 |
+| Visibility change | 2 |
+| Screenshot warning | 2 |
+| Creator rejoin (auto-approve) | 4 |
+| Offline message recovery | 3 |
+| Creator rejoin + missed messages | 1 |
+| After-seen TTL = 3s | 2 |
+| Join-approved creatorId | 2 |
+| SPA fallback (deep links) | 1 |
 
 ---
 
@@ -235,8 +250,13 @@ node test-comprehensive.js
 | `message-status-update` | Server → Sender | Status update (delivered/read) |
 | `visibility-change` | Client → Server | Tab visible/hidden |
 | `user-visibility-changed` | Server → Room | User visibility broadcast |
-| `screenshot-warning` | Client → Server | Screenshot detected |
+| `user_inactive` | Client → Server | User switched tab (3-state) |
+| `user_active` | Client → Server | User returned to tab (3-state) |
+| `user-state-changed` | Server → Room | Broadcast active/inactive state |
+| `screenshot-warning` | Client → Server | Screenshot detected (<3s heuristic) |
 | `screenshot-warning` | Server → Room | Screenshot warning broadcast |
+| `rejoin-room` | Client → Server | Rejoin after disconnect (delivers missed msgs) |
+| `user-rejoined` | Server → Room | User reconnected notification |
 | `users-updated` | Server → Room | Online users list changed |
 | `user-left` | Server → Room | User disconnected |
 | `error-message` | Server → Client | Error notification |
@@ -293,7 +313,8 @@ Every piece of data has a time-to-live:
 | Room metadata | 6 hours | Room ceases to exist |
 | User presence | 6 hours | User entry removed |
 | Join requests | 30 minutes | Request auto-rejected |
-| Messages | 5s – 5m (user-selected) | Message permanently deleted |
+| Messages | 3s – 5m (user-selected) | Message permanently deleted |
+| Missed msg buffer | 30 minutes | Offline messages cleared |
 | Rate limit counters | 60 seconds | Counter resets |
 
 **If Redis restarts, all data is lost — by design.** There is nothing to recover, nothing to back up, and nothing to breach.

@@ -91,10 +91,22 @@ async function createRoom(roomId, creatorId, creatorName) {
 async function getRoom(roomId) {
   if (useMemory) {
     const data = memGet(`${P}room:${roomId}`);
-    return data && data.creator ? data : null;
+    return data && data.creator ? { ...data } : null;
   }
   const data = await redis.hgetall(`${P}room:${roomId}`);
   return data && data.creator ? data : null;
+}
+
+async function updateRoomCreator(roomId, newCreatorId) {
+  if (useMemory) {
+    const data = memGet(`${P}room:${roomId}`);
+    if (data) {
+      data.creator = newCreatorId;
+      memSet(`${P}room:${roomId}`, data, 6 * 60 * 60);
+    }
+  } else {
+    await redis.hset(`${P}room:${roomId}`, 'creator', newCreatorId);
+  }
 }
 
 async function refreshRoomTTL(roomId) {
@@ -209,6 +221,40 @@ async function deleteMessage(roomId, messageId) {
   }
 }
 
+// ---- Missed message buffer (for offline users) ----
+async function bufferMissedMessage(roomId, userId, messageData) {
+  const key = `${P}missed:${roomId}:${userId}`;
+  if (useMemory) {
+    const msgs = memGet(key) || [];
+    msgs.push(messageData);
+    memSet(key, msgs, 30 * 60);
+  } else {
+    await redis.rpush(key, JSON.stringify(messageData));
+    await redis.expire(key, 30 * 60);
+  }
+}
+
+async function getMissedMessages(roomId, userId) {
+  const key = `${P}missed:${roomId}:${userId}`;
+  if (useMemory) {
+    const msgs = memGet(key) || [];
+    memDel(key);
+    return msgs;
+  }
+  const msgs = await redis.lrange(key, 0, -1);
+  if (msgs.length > 0) await redis.del(key);
+  return msgs.map((m) => JSON.parse(m));
+}
+
+async function clearMissedMessages(roomId, userId) {
+  const key = `${P}missed:${roomId}:${userId}`;
+  if (useMemory) {
+    memDel(key);
+  } else {
+    await redis.del(key);
+  }
+}
+
 // ---- Rate limiting ----
 async function checkRateLimit(identifier, maxRequests, windowSeconds) {
   const key = `${P}ratelimit:${identifier}`;
@@ -229,6 +275,7 @@ module.exports = {
   initRedis,
   createRoom,
   getRoom,
+  updateRoomCreator,
   refreshRoomTTL,
   addUserToRoom,
   removeUserFromRoom,
@@ -239,5 +286,8 @@ module.exports = {
   storeMessage,
   getMessage,
   deleteMessage,
+  bufferMissedMessage,
+  getMissedMessages,
+  clearMissedMessages,
   checkRateLimit,
 };

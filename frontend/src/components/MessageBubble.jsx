@@ -59,7 +59,7 @@ export default function MessageBubble({ message }) {
 
     if (ttl === 'after-seen') {
       if (message.status === 'read' || (isOwn && seenRef.current)) {
-        setTimeLeft(10);
+        setTimeLeft(3);
       }
     } else if (ttlSec != null) {
       const elapsed = Math.floor((Date.now() - message.receivedAt) / 1000);
@@ -75,7 +75,8 @@ export default function MessageBubble({ message }) {
     if (timeLeft <= 0) {
       setFadeOut(true);
       timerRef.current = setTimeout(() => {
-        setMessages((prev) => prev.filter((m) => m.messageId !== message.messageId));
+        // Broadcast delete to ALL users via server (not just local)
+        deleteMessage(message.messageId);
       }, 500);
       return;
     }
@@ -85,7 +86,7 @@ export default function MessageBubble({ message }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [timeLeft, message.messageId, setMessages]);
+  }, [timeLeft, message.messageId, deleteMessage]);
 
   useEffect(() => {
     return () => {

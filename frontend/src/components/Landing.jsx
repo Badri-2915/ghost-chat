@@ -5,7 +5,7 @@
 // feature highlights (E2EE, auto-delete, no data stored).
 // =============================================================================
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useChat } from '../context/ChatContext';
 import { Ghost, ArrowRight, Plus, LogIn, Shield, Timer, Lock } from 'lucide-react';
 
@@ -14,6 +14,18 @@ export default function Landing() {
   const [mode, setMode] = useState(null); // null | 'create' | 'join'
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+
+  // Deep link: auto-detect /r/ROOMCODE from URL
+  useEffect(() => {
+    const path = window.location.pathname;
+    const match = path.match(/^\/r\/([A-Za-z0-9_-]{6,})$/);
+    if (match) {
+      setCode(match[1]);
+      setMode('join');
+      // Clean URL without reload
+      window.history.replaceState({}, '', '/');
+    }
+  }, []);
 
   const handleCreate = (e) => {
     e.preventDefault();
