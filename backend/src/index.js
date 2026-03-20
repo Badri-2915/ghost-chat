@@ -67,8 +67,8 @@ const io = new Server(server, {
     origin: corsOrigins,
     methods: ['GET', 'POST'],
   },
-  pingTimeout: 30000,
-  pingInterval: 10000,
+  pingTimeout: 10000,
+  pingInterval: 5000,
 });
 
 // Socket.IO connection handling

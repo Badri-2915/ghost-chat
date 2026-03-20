@@ -39,6 +39,7 @@ export function ChatProvider({ children }) {
   const [toasts, setToasts] = useState([]);               // toast notification queue
   const [userVisibility, setUserVisibility] = useState({}); // userId -> isVisible
   const [userStates, setUserStates] = useState({});           // userId -> 'active'|'inactive'
+  const offlineUserIds = useRef(new Set());                    // Track offline users to prevent re-adding
 
   const roomKeyRef = useRef(null);
 
@@ -104,10 +105,14 @@ export function ChatProvider({ children }) {
       'users-updated': (data) => {
         // data is { users: { userId: { username, joinedAt } }, creator: string }
         if (data && data.users) {
-          setUsers(data.users);
+          // Filter out users we know are offline (prevents re-adding after user-left)
+          const filtered = { ...data.users };
+          for (const uid of offlineUserIds.current) {
+            if (filtered[uid]) delete filtered[uid];
+          }
+          setUsers(filtered);
           if (data.creator) setCreatorId(data.creator);
         } else {
-          // Backward compat: plain object
           setUsers(data);
         }
       },
@@ -192,6 +197,8 @@ export function ChatProvider({ children }) {
         });
         // Mark user as offline immediately in presence state
         setUserStates((prev) => ({ ...prev, [leftId]: 'offline' }));
+        // Track offline user so users-updated doesn't re-add them
+        offlineUserIds.current.add(leftId);
         // Remove user from the users list immediately so they don't show as online
         setUsers((prev) => {
           const next = { ...prev };
@@ -202,6 +209,9 @@ export function ChatProvider({ children }) {
       },
 
       'user-rejoined': ({ userId: rejoinId, username: rejoinName }) => {
+        // User is back online — remove from offline tracking
+        offlineUserIds.current.delete(rejoinId);
+        setUserStates((prev) => ({ ...prev, [rejoinId]: 'active' }));
         if (rejoinId !== userId) {
           addToast(`${rejoinName} rejoined the room`, 'info', 3000);
         }
@@ -244,6 +254,8 @@ export function ChatProvider({ children }) {
 
     const handleReconnect = () => {
       if (screen === 'chat' && roomCode && userId && username) {
+        // Clear offline tracking — server will send fresh users-updated after rejoin
+        offlineUserIds.current.clear();
         // Always use rejoin-room — preserves userId so pending removal timer can be cancelled.
         // If creator, include creatorToken so backend can restore creator privileges.
         emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
