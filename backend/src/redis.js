@@ -279,6 +279,48 @@ async function clearMissedMessages(roomId, userId) {
   }
 }
 
+// ---- Room destruction ----
+async function destroyRoom(roomId) {
+  // Delete all Redis keys associated with this room
+  const keys = [
+    `${P}room:${roomId}`,           // Room metadata
+    `${P}room:${roomId}:users`,     // Users list
+    `${P}room:${roomId}:pending`,   // Join requests
+  ];
+  
+  // Also delete any missed message keys for this room
+  if (!useMemory) {
+    // In Redis mode, we need to find and delete all missed message keys
+    const pattern = `${P}missed:${roomId}:*`;
+    const stream = redis.scanStream({
+      match: pattern,
+      count: 100
+    });
+    
+    for await (const foundKeys of stream) {
+      if (foundKeys.length > 0) {
+        await redis.del(...foundKeys);
+      }
+    }
+  }
+  
+  // Delete the main keys
+  if (useMemory) {
+    for (const key of keys) {
+      memDel(key);
+    }
+    // Also clean up missed messages in memory
+    const missedPattern = `${P}missed:${roomId}:`;
+    for (const [key] of Object.entries(memCache)) {
+      if (key.startsWith(missedPattern)) {
+        memDel(key);
+      }
+    }
+  } else {
+    await redis.del(...keys);
+  }
+}
+
 // ---- Rate limiting ----
 async function checkRateLimit(identifier, maxRequests, windowSeconds) {
   const key = `${P}ratelimit:${identifier}`;
@@ -314,5 +356,6 @@ module.exports = {
   bufferMissedMessage,
   getMissedMessages,
   clearMissedMessages,
+  destroyRoom,
   checkRateLimit,
 };

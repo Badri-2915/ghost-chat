@@ -1516,6 +1516,60 @@ async function testRoomCodeTrimming() {
   await wait(100);
 }
 
+async function testRoomAutoDestruction() {
+  console.log('\n🧪 Test Suite: Room Auto-Destruction');
+
+  // Create room with creator
+  const creator = await createRoomHelper('Alice');
+  const joiner = await joinRoomHelper(creator.roomCode, 'Bob');
+  const reqs = await waitForEvent(creator.client, 'join-requests-updated');
+  const pid = Object.keys(reqs)[0];
+  creator.client.emit('approve-join', { roomCode: creator.roomCode, userId: pid });
+  await waitForEvent(joiner.client, 'join-approved');
+  await wait(100);
+
+  // Verify room exists by trying to join (should get join-requested)
+  const checker1 = createClient();
+  await waitForEvent(checker1, 'connect');
+  await wait(50);
+  checker1.emit('join-request', { roomCode: creator.roomCode, username: 'Checker1' });
+  const req1 = await waitForEvent(checker1, 'join-requested');
+  assert(req1.username === 'Checker1', 'Room exists - can join');
+  disconnectAll(checker1);
+
+  // Bob disconnects
+  const leftP = waitForEvent(creator.client, 'user-left');
+  joiner.client.disconnect();
+  await leftP;
+  await wait(200);
+
+  // Room should still exist (creator still in it)
+  const checker2 = createClient();
+  await waitForEvent(checker2, 'connect');
+  await wait(50);
+  checker2.emit('join-request', { roomCode: creator.roomCode, username: 'Checker2' });
+  const req2 = await waitForEvent(checker2, 'join-requested');
+  assert(req2.username === 'Checker2', 'Room still exists with creator');
+  disconnectAll(checker2);
+
+  // Creator disconnects
+  creator.client.disconnect();
+  
+  // Wait for 10s grace period + 1s buffer
+  await wait(11000);
+
+  // Room should be destroyed (no users remaining)
+  const rejoiner = createClient();
+  await waitForEvent(rejoiner, 'connect');
+  await wait(50);
+  rejoiner.emit('join-request', { roomCode: creator.roomCode, username: 'Charlie' });
+  const err = await waitForEvent(rejoiner, 'error-message');
+  assert(err.message === 'Room not found', 'Cannot rejoin destroyed room');
+
+  disconnectAll(rejoiner);
+  await wait(100);
+}
+
 async function testCleanExit() {
   console.log('\n🧪 Test Suite: Clean Exit');
 
@@ -1564,6 +1618,7 @@ async function runAll() {
     await testCreatorIdentityAndAbsence();
     await testEdgeCasesAndStability();
     await testMultipleUsersConcurrency();
+    await testRoomAutoDestruction();
     await testCleanExit();
   } catch (err) {
     console.error(`\n💥 Test suite crashed: ${err.message}`);

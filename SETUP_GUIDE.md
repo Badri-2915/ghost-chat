@@ -347,6 +347,7 @@ node test-comprehensive.js
 | Room Code Trimming | 4 |
 | Rejoin Active State | 2 |
 | Creator Identity & Absence | 5 |
+| Room Auto-Destruction | 3 |
 | Edge Cases & Stability | 9 |
 | Multiple Users & Concurrency | 8 |
 | Clean Exit | 3 |

@@ -28,6 +28,7 @@ const {
   getJoinRequests,
   refreshRoomTTL,
   getMissedMessages,
+  destroyRoom,
 } = require('../redis');
 
 // In-memory map: socketId -> { roomId, userId, username, pending }
@@ -289,10 +290,19 @@ async function handleDisconnect(socket, io) {
   const timer = setTimeout(async () => {
     pendingRemovals.delete(userId);
     await removeUserFromRoom(roomId, userId);
+    
+    // Check if room is now empty and destroy it completely
     const users = await getRoomUsers(roomId);
-    const roomData = await getRoom(roomId);
-    if (roomData) {
-      io.to(roomId).emit('users-updated', { users, creator: roomData.creator });
+    if (Object.keys(users).length === 0) {
+      // Room is empty - destroy all data
+      await destroyRoom(roomId);
+      console.log(`[Room] ${roomId} destroyed - no users remaining`);
+    } else {
+      // Room still has users - update the list
+      const roomData = await getRoom(roomId);
+      if (roomData) {
+        io.to(roomId).emit('users-updated', { users, creator: roomData.creator });
+      }
     }
   }, 10000);
 

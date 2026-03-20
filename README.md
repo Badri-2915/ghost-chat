@@ -73,6 +73,7 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Deep Link Sharing** | Share `https://badri.online/r/CODE` — auto-fills room code on open |
 | **Creator Rejoin** | Creator auto-approved via secret `creatorToken` (NOT by username) |
 | **Creator Absence** | Join blocked when creator is offline — "Room creator is not available" |
+| **Room Auto-Destruction** | Empty rooms automatically destroyed (all Redis data cleaned) |
 | **Offline Recovery** | Messages buffered in Redis while user is offline, delivered on rejoin |
 | **Delete Permissions** | Only sender can delete own messages; room creator can moderate |
 | **Message Length Limit** | Max 5000 characters per message (server enforced) |
@@ -122,7 +123,7 @@ ghost-chat/
 │   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
 │   ├── static/                          # Built frontend (production)
 │   ├── test.js                          # Quick feature tests (46 assertions)
-│   └── test-comprehensive.js            # Full test suite (162 assertions)
+│   └── test-comprehensive.js            # Full test suite (165 assertions)
 ├── frontend/
 │   ├── public/
 │   │   ├── sitemap.xml                  # SEO sitemap for Google
@@ -205,10 +206,10 @@ cd frontend && npm run dev   # Frontend dev server
 # Start server first, then:
 cd backend
 node test.js                  # Quick suite: 46 assertions
-node test-comprehensive.js    # Full suite: 162 assertions
+node test-comprehensive.js    # Full suite: 165 assertions
 ```
 
-### Test Coverage (23 test suites, 162 assertions)
+### Test Coverage (24 test suites, 165 assertions)
 
 | Suite | Assertions | Covers |
 |-------|------------|--------|
@@ -231,6 +232,7 @@ node test-comprehensive.js    # Full suite: 162 assertions
 | Room Code Trimming | 4 | Whitespace join, whitespace rejoin, empty-after-trim |
 | Rejoin Active State | 2 | User broadcasts active on rejoin, no stale inactive |
 | Creator Identity & Absence | 5 | creatorToken verification, imposter blocked, creator absent blocked |
+| Room Auto-Destruction | 3 | Empty rooms destroyed, all Redis data cleaned |
 | Edge Cases & Stability | 9 | Unicode, long msgs, burst 20 msgs, post-disconnect, concurrent ops |
 | Multiple Users & Concurrency | 8 | 3-user broadcast, cross-room isolation, concurrent creation |
 | Clean Exit | 3 | Leave notification, Redis cleanup, graceful disconnect |
@@ -359,6 +361,7 @@ The architecture is designed to scale — but the current deployment is right-si
 - **Creator identity via `creatorToken`** — secret token, NOT username-based
 - Username is display-only; duplicate names are allowed (different users)
 - Join blocked when creator is absent (no unsupervised access)
+- **Room auto-destruction** — empty rooms completely removed (metadata, users, pending, messages)
 - Delete permissions: only sender can delete own messages (creator can moderate)
 - Message length capped at 5000 characters (server enforced)
 - Tab detection warns when users switch away
@@ -373,6 +376,7 @@ The architecture is designed to scale — but the current deployment is right-si
 - Requires trust in client-side encryption implementation
 - Single-server deployment (no horizontal scaling currently)
 - Free tier cold starts (~30s after 15 min inactivity, mitigated by UptimeRobot)
+- Room destruction is final — all data permanently removed when empty
 
 > Designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity. Scales with infrastructure, not unlimited.
 
