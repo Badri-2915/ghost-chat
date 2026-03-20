@@ -1606,6 +1606,210 @@ async function testPresenceAndDisconnect() {
   await wait(100);
 }
 
+async function testCreatorRejoinViaRejoinRoom() {
+  console.log('\n🧪 Test Suite: Creator Rejoin via rejoin-room');
+
+  // Create room, get creatorToken
+  const creator = await createRoomHelper('Alice');
+  const { roomCode, userId: creatorUserId, creatorToken } = creator;
+
+  // Add a joiner so room doesn't get destroyed
+  const joiner = await joinRoomHelper(roomCode, 'Bob');
+  const reqs = await waitForEvent(creator.client, 'join-requests-updated');
+  const pid = Object.keys(reqs)[0];
+  creator.client.emit('approve-join', { roomCode, userId: pid });
+  await waitForEvent(joiner.client, 'join-approved');
+  await wait(100);
+
+  // Creator disconnects
+  const leftP = waitForEvent(joiner.client, 'user-left');
+  creator.client.disconnect();
+  await leftP;
+  await wait(200);
+
+  // Creator reconnects via rejoin-room with creatorToken (simulating socket reconnect)
+  const newCreatorSocket = createClient();
+  await waitForEvent(newCreatorSocket, 'connect');
+  await wait(50);
+
+  // Listen for events that prove rejoin worked
+  const rejoinP = waitForEvent(joiner.client, 'user-rejoined');
+  const usersP = waitForEvent(joiner.client, 'users-updated');
+  const activeP = waitForEvent(joiner.client, 'user-state-changed');
+
+  newCreatorSocket.emit('rejoin-room', { roomCode, userId: creatorUserId, username: 'Alice', creatorToken });
+
+  const rejoined = await rejoinP;
+  assert(rejoined.username === 'Alice', 'Creator rejoined via rejoin-room');
+
+  const usersUpdate = await usersP;
+  assert(!!usersUpdate.users, 'Users list updated after creator rejoin');
+  // Verify Alice is back in the users list
+  const aliceEntry = Object.entries(usersUpdate.users).find(([, d]) => d.username === 'Alice');
+  assert(!!aliceEntry, 'Alice is in users list after rejoin');
+
+  const activeState = await activeP;
+  assert(activeState.state === 'active', 'Creator broadcasts active state after rejoin');
+
+  disconnectAll(newCreatorSocket, joiner.client);
+  await wait(100);
+}
+
+async function testCreatorRejoinViaJoinRequest() {
+  console.log('\n🧪 Test Suite: Creator Rejoin via join-request');
+
+  // Create room, get creatorToken
+  const creator = await createRoomHelper('Alice');
+  const { roomCode, creatorToken } = creator;
+
+  // Add a joiner so room doesn't get destroyed
+  const joiner = await joinRoomHelper(roomCode, 'Bob');
+  const reqs = await waitForEvent(creator.client, 'join-requests-updated');
+  const pid = Object.keys(reqs)[0];
+  creator.client.emit('approve-join', { roomCode, userId: pid });
+  await waitForEvent(joiner.client, 'join-approved');
+  await wait(100);
+
+  // Creator disconnects
+  const leftP = waitForEvent(joiner.client, 'user-left');
+  creator.client.disconnect();
+  await leftP;
+  await wait(200);
+
+  // Creator uses join-request with creatorToken (simulating manual rejoin from landing page)
+  const newCreatorSocket = createClient();
+  await waitForEvent(newCreatorSocket, 'connect');
+  await wait(50);
+
+  const approvedP = waitForEvent(newCreatorSocket, 'join-approved');
+  newCreatorSocket.emit('join-request', { roomCode, username: 'Alice', creatorToken });
+
+  const approved = await approvedP;
+  assert(approved.isCreator === true, 'Creator auto-approved via join-request + creatorToken');
+  assert(!!approved.userId, 'Creator gets new userId');
+  assert(approved.creatorToken === creatorToken, 'CreatorToken preserved');
+
+  // Verify Bob sees the rejoin
+  const rejoinP = waitForEvent(joiner.client, 'user-rejoined');
+  const rejoined = await rejoinP;
+  assert(rejoined.username === 'Alice', 'Bob sees Alice rejoined');
+
+  disconnectAll(newCreatorSocket, joiner.client);
+  await wait(100);
+}
+
+async function testCreatorRejoinSoloRoom() {
+  console.log('\n🧪 Test Suite: Creator Rejoin Solo Room (before timer)');
+
+  // Creator alone in room
+  const creator = await createRoomHelper('Alice');
+  const { roomCode, userId: creatorUserId, creatorToken } = creator;
+
+  // Creator disconnects (10s timer starts)
+  creator.client.disconnect();
+  await wait(500); // Wait less than 10s
+
+  // Creator reconnects via rejoin-room before timer fires
+  const newSocket = createClient();
+  await waitForEvent(newSocket, 'connect');
+  await wait(50);
+
+  const usersP = waitForEvent(newSocket, 'users-updated');
+  newSocket.emit('rejoin-room', { roomCode, userId: creatorUserId, username: 'Alice', creatorToken });
+
+  const usersUpdate = await usersP;
+  assert(!!usersUpdate.users, 'Creator rejoined solo room before timer');
+  const aliceEntry = Object.entries(usersUpdate.users).find(([, d]) => d.username === 'Alice');
+  assert(!!aliceEntry, 'Alice is back in room');
+
+  // Wait for the 10s timer — it should have been cancelled so room survives
+  await wait(10500);
+
+  // Verify room still exists by sending a message
+  const msgP = waitForEvent(newSocket, 'new-message');
+  newSocket.emit('send-message', { roomCode, encryptedContent: 'still alive', ttl: '5m' });
+  const msg = await msgP;
+  assert(msg.encryptedContent === 'still alive', 'Room survived after timer (timer was cancelled)');
+
+  disconnectAll(newSocket);
+  await wait(100);
+}
+
+async function testMissedMessageBuffer() {
+  console.log('\n🧪 Test Suite: Missed Message Buffer (cap at 3)');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Bob disconnects
+  const leftP = waitForEvent(creator.client, 'user-left');
+  joiner.client.disconnect();
+  await leftP;
+  await wait(200);
+
+  // Send 5 messages while Bob is offline — only last 3 should be buffered
+  for (let i = 1; i <= 5; i++) {
+    creator.client.emit('send-message', { roomCode: creator.roomCode, encryptedContent: `msg-${i}`, ttl: '5m' });
+    await wait(100);
+  }
+
+  // Bob reconnects
+  const newBob = createClient();
+  await waitForEvent(newBob, 'connect');
+  await wait(50);
+
+  const missedMessages = [];
+  newBob.on('new-message', (data) => missedMessages.push(data));
+
+  newBob.emit('rejoin-room', { roomCode: creator.roomCode, userId: joiner.userId, username: 'Bob' });
+  await wait(500);
+
+  assert(missedMessages.length === 3, `Bob received exactly 3 missed messages (got ${missedMessages.length})`);
+  assert(missedMessages[0].encryptedContent === 'msg-3', 'First missed = msg-3 (oldest of last 3)');
+  assert(missedMessages[1].encryptedContent === 'msg-4', 'Second missed = msg-4');
+  assert(missedMessages[2].encryptedContent === 'msg-5', 'Third missed = msg-5 (most recent)');
+
+  disconnectAll(creator.client, newBob);
+  await wait(100);
+}
+
+async function testMissedMessageDeliveryStatus() {
+  console.log('\n🧪 Test Suite: Missed Message Delivery Status');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Bob disconnects
+  const leftP = waitForEvent(creator.client, 'user-left');
+  joiner.client.disconnect();
+  await leftP;
+  await wait(200);
+
+  // Alice sends a message while Bob is offline
+  const msgP = waitForEvent(creator.client, 'new-message');
+  creator.client.emit('send-message', { roomCode: creator.roomCode, encryptedContent: 'hello offline bob', ttl: '5m' });
+  const sentMsg = await msgP;
+  assert(sentMsg.status === 'sent', 'Message status is sent while Bob offline');
+
+  // Bob reconnects and receives the missed message
+  const newBob = createClient();
+  await waitForEvent(newBob, 'connect');
+  await wait(50);
+
+  const missedP = waitForEvent(newBob, 'new-message');
+  newBob.emit('rejoin-room', { roomCode: creator.roomCode, userId: joiner.userId, username: 'Bob' });
+  const missed = await missedP;
+  assert(missed.encryptedContent === 'hello offline bob', 'Missed message delivered on reconnect');
+
+  // Bob sends delivery receipt
+  const statusP = waitForEvent(creator.client, 'message-status-update');
+  newBob.emit('message-delivered', { roomCode: creator.roomCode, messageId: missed.messageId });
+  const statusUpdate = await statusP;
+  assert(statusUpdate.status === 'delivered', 'Message status updated to delivered after reconnect');
+  assert(statusUpdate.messageId === sentMsg.messageId, 'Correct messageId for delivery receipt');
+
+  disconnectAll(creator.client, newBob);
+  await wait(100);
+}
+
 async function testCleanExit() {
   console.log('\n🧪 Test Suite: Clean Exit');
 
@@ -1656,6 +1860,11 @@ async function runAll() {
     await testMultipleUsersConcurrency();
     await testRoomAutoDestruction();
     await testPresenceAndDisconnect();
+    await testCreatorRejoinViaRejoinRoom();
+    await testCreatorRejoinViaJoinRequest();
+    await testCreatorRejoinSoloRoom();
+    await testMissedMessageBuffer();
+    await testMissedMessageDeliveryStatus();
     await testCleanExit();
   } catch (err) {
     console.error(`\n💥 Test suite crashed: ${err.message}`);

@@ -93,6 +93,9 @@ async function handleJoinRequest(socket, io, { roomCode, username, creatorToken 
     const userId = generateUserId();
     const oldCreatorId = room.creator;
 
+    // Cancel any pending disconnect removal for the old creator
+    cancelPendingRemoval(oldCreatorId);
+
     // Remove any stale entries for this username before adding fresh
     await removeUserByUsername(trimmedCode, username);
     cleanStaleSocketEntries(trimmedCode, username);
@@ -219,7 +222,7 @@ async function handleRejectJoin(socket, io, { roomCode, userId }) {
 // ---------------------------------------------------------------------------
 // Rejoin room: user reconnects after a disconnect (same userId, new socket)
 // ---------------------------------------------------------------------------
-async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
+async function handleRejoinRoom(socket, io, { roomCode, userId, username, creatorToken }) {
   const trimmedCode = (roomCode || '').trim();
   const room = await getRoom(trimmedCode);
   if (!room) {
@@ -227,36 +230,51 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
     return;
   }
 
+  // Check if this is a creator rejoin via creatorToken
+  const isCreatorRejoin = creatorToken && room.creatorToken && creatorToken === room.creatorToken;
+
   // Clean stale entries for this username (prevents duplicates)
   await removeUserByUsername(trimmedCode, username);
   cleanStaleSocketEntries(trimmedCode, username);
 
   // Cancel any pending disconnect removal for this user
   cancelPendingRemoval(userId);
-  
-  // Also remove from recently removed if present
-  recentlyRemoved.delete(userId);
+  // Also cancel pending removal for the old creator userId (may differ)
+  if (isCreatorRejoin && room.creator !== userId) {
+    cancelPendingRemoval(room.creator);
+  }
 
   // Register the new socket with the existing userId
   socket.join(trimmedCode);
   socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
 
   await addUserToRoom(trimmedCode, userId, username);
+
+  // If creator rejoin, update the creator field to this userId
+  if (isCreatorRejoin) {
+    await updateRoomCreator(trimmedCode, userId);
+  }
+
   await refreshRoomTTL(trimmedCode);
 
+  const updatedRoom = await getRoom(trimmedCode);
   const users = await getRoomUsers(trimmedCode);
-  io.to(trimmedCode).emit('users-updated', { users, creator: room.creator });
+  io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
   io.to(trimmedCode).emit('user-rejoined', { userId, username });
 
   // Broadcast active state so UI doesn't show as inactive after rejoin
   io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
 
-  // Deliver missed messages for this user
+  // Deliver missed messages for this user (check both current and old creator userId)
   try {
     const missed = await getMissedMessages(trimmedCode, userId);
     for (const msg of missed) socket.emit('new-message', msg);
-  } catch (e) { /* best effort */
-  }
+    // If creator rejoin, also deliver messages buffered under old creator userId
+    if (isCreatorRejoin && room.creator !== userId) {
+      const oldMissed = await getMissedMessages(trimmedCode, room.creator);
+      for (const msg of oldMissed) socket.emit('new-message', msg);
+    }
+  } catch (e) { /* best effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +282,6 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
 // ---------------------------------------------------------------------------
 // Pending removal timers — allows grace period for offline buffering
 const pendingRemovals = new Map();
-
-// Recently removed users — for extended message buffering (5 minutes)
-const recentlyRemoved = new Map(); // userId -> removal timestamp
 
 function cancelPendingRemoval(userId) {
   const timer = pendingRemovals.get(userId);
@@ -299,17 +314,6 @@ async function handleDisconnect(socket, io) {
     pendingRemovals.delete(userId);
     await removeUserFromRoom(roomId, userId);
     
-    // Track recently removed users for extended buffering (5 minutes)
-    recentlyRemoved.set(userId, Date.now());
-    
-    // Clean up old entries (older than 5 minutes)
-    const now = Date.now();
-    for (const [uid, timestamp] of recentlyRemoved.entries()) {
-      if (now - timestamp > 5 * 60 * 1000) {
-        recentlyRemoved.delete(uid);
-      }
-    }
-    
     // Check if room is now empty and destroy it completely
     const users = await getRoomUsers(roomId);
     if (Object.keys(users).length === 0) {
@@ -336,16 +340,6 @@ function findSocketByUserId(io, userId, roomCode) {
     }
   }
   return null;
-}
-
-// Utility: get pending removals (for message buffering)
-function getPendingRemovals() {
-  return pendingRemovals;
-}
-
-// Utility: get recently removed users (for extended message buffering)
-function getRecentlyRemoved() {
-  return recentlyRemoved;
 }
 
 // Utility: remove stale socketUsers entries for a given username + room
