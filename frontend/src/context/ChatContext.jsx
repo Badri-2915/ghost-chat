@@ -16,23 +16,45 @@ import { deriveRoomKey, encryptMessage, decryptMessage } from '../crypto/encrypt
 
 const ChatContext = createContext(null);
 
+// ---- Session persistence helpers ----
+const SESSION_KEY = 'gc_session';
+
+function saveSession(data) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) { /* private mode */ }
+}
+
+function loadSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ok */ }
+}
+
 export function ChatProvider({ children }) {
   const { socket, connected, reconnecting, emit, on, off } = useSocket();
 
+  // ---- Restore saved session on mount (lazy — runs only once) ----
+  const savedRef = useRef(loadSession());
+
   // ---- Core state ----
-  const [screen, setScreen] = useState('landing'); // landing | waiting | chat
-  const [username, setUsername] = useState('');
-  const [roomCode, setRoomCode] = useState('');
-  const [userId, setUserId] = useState('');
-  const [isCreator, setIsCreator] = useState(false);
+  const [screen, setScreen] = useState(() => savedRef.current?.screen === 'chat' ? 'chat' : 'landing');
+  const [username, setUsername] = useState(() => savedRef.current?.username || '');
+  const [roomCode, setRoomCode] = useState(() => savedRef.current?.roomCode || '');
+  const [userId, setUserId] = useState(() => savedRef.current?.userId || '');
+  const [isCreator, setIsCreator] = useState(() => savedRef.current?.isCreator || false);
   const [users, setUsers] = useState({});
   const [messages, setMessages] = useState([]);
   const [joinRequests, setJoinRequests] = useState({});
   const [typingUsers, setTypingUsers] = useState({});
   const [error, setError] = useState('');
   const [selectedTTL, setSelectedTTL] = useState('5m');
-  const [creatorId, setCreatorId] = useState('');
-  const [creatorToken, setCreatorToken] = useState(''); // Secret token for creator rejoin
+  const [creatorId, setCreatorId] = useState(() => savedRef.current?.creatorId || '');
+  const [creatorToken, setCreatorToken] = useState(() => savedRef.current?.creatorToken || ''); // Secret token for creator rejoin
+  const hasAutoRejoined = useRef(false); // Prevent double auto-rejoin
 
   // ---- New feature state ----
   const [replyTo, setReplyTo] = useState(null);          // message being replied to
@@ -57,6 +79,13 @@ export function ChatProvider({ children }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // ---- Persist session whenever critical state changes ----
+  useEffect(() => {
+    if (screen === 'chat' && roomCode && userId) {
+      saveSession({ screen, username, roomCode, userId, isCreator, creatorToken, creatorId });
+    }
+  }, [screen, username, roomCode, userId, isCreator, creatorToken, creatorId]);
+
   // Derive room encryption key when room code is set
   useEffect(() => {
     if (roomCode) {
@@ -65,6 +94,17 @@ export function ChatProvider({ children }) {
       });
     }
   }, [roomCode]);
+
+  // ---- Auto-rejoin on page load if we have a saved session ----
+  useEffect(() => {
+    if (!socket || !connected || hasAutoRejoined.current) return;
+    if (screen === 'chat' && roomCode && userId && username) {
+      hasAutoRejoined.current = true;
+      offlineUserIds.current.clear();
+      emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
+      console.log('[AutoRejoin] Restoring session:', roomCode, creatorToken ? '(creator)' : '(user)');
+    }
+  }, [socket, connected, screen, roomCode, userId, username, creatorToken, emit]);
 
   // ---- Socket event listeners ----
   useEffect(() => {
@@ -233,6 +273,16 @@ export function ChatProvider({ children }) {
       'error-message': ({ message }) => {
         setError(message);
         setTimeout(() => setError(''), 5000);
+        // If room is gone, clear session and go back to landing
+        if (message && (message.includes('no longer exists') || message.includes('not found'))) {
+          clearSession();
+          hasAutoRejoined.current = false;
+          setScreen('landing');
+          setRoomCode('');
+          setUserId('');
+          setCreatorToken('');
+          setIsCreator(false);
+        }
       },
     };
 
@@ -363,6 +413,9 @@ export function ChatProvider({ children }) {
 
   // Leave room: disconnect from current room and reset to landing
   const leaveRoom = useCallback(() => {
+    clearSession();
+    hasAutoRejoined.current = false;
+    offlineUserIds.current.clear();
     setScreen('landing');
     setRoomCode('');
     setUserId('');
