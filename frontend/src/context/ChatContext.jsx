@@ -6,6 +6,7 @@
 //
 // Presence states: active | inactive (tab switched) | offline (disconnected)
 // Delete permission: only sender can delete own messages (server enforces).
+// Identity: creatorToken (secret) is used for creator rejoin, NOT username.
 // All Socket.IO event listeners are registered here.
 // =============================================================================
 
@@ -31,6 +32,7 @@ export function ChatProvider({ children }) {
   const [error, setError] = useState('');
   const [selectedTTL, setSelectedTTL] = useState('5m');
   const [creatorId, setCreatorId] = useState('');
+  const [creatorToken, setCreatorToken] = useState(''); // Secret token for creator rejoin
 
   // ---- New feature state ----
   const [replyTo, setReplyTo] = useState(null);          // message being replied to
@@ -73,6 +75,7 @@ export function ChatProvider({ children }) {
         setUserId(data.userId);
         setUsername(data.username);
         setIsCreator(true);
+        if (data.creatorToken) setCreatorToken(data.creatorToken);
         setScreen('chat');
       },
 
@@ -89,6 +92,7 @@ export function ChatProvider({ children }) {
         if (data?.roomCode) setRoomCode(data.roomCode);
         if (data?.isCreator) setIsCreator(true);
         if (data?.creatorId) setCreatorId(data.creatorId);
+        if (data?.creatorToken) setCreatorToken(data.creatorToken);
         setScreen('chat');
       },
 
@@ -232,7 +236,7 @@ export function ChatProvider({ children }) {
 
     const handleReconnect = () => {
       if (screen === 'chat' && roomCode && userId && username) {
-        emit('rejoin-room', { roomCode, userId, username });
+        emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
         console.log('[Reconnect] Rejoining room:', roomCode);
       }
     };
@@ -241,7 +245,7 @@ export function ChatProvider({ children }) {
     return () => {
       socket.io.off('reconnect', handleReconnect);
     };
-  }, [socket, screen, roomCode, userId, username, emit]);
+  }, [socket, screen, roomCode, userId, username, creatorToken, emit]);
 
   // ---- Tab visibility & 3-state presence ----
   // Emits user_inactive / user_active for presence state tracking.
@@ -273,9 +277,10 @@ export function ChatProvider({ children }) {
     (name, code) => {
       setUsername(name);
       setRoomCode(code);
-      emit('join-request', { roomCode: code, username: name });
+      // Send creatorToken if we have one (for creator rejoin verification)
+      emit('join-request', { roomCode: code, username: name, creatorToken: creatorToken || undefined });
     },
-    [emit]
+    [emit, creatorToken]
   );
 
   const approveJoin = useCallback(
@@ -342,6 +347,7 @@ export function ChatProvider({ children }) {
     setUsername('');
     setIsCreator(false);
     setCreatorId('');
+    setCreatorToken('');
     setUsers({});
     setMessages([]);
     setJoinRequests({});

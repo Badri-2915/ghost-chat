@@ -2,7 +2,7 @@
 // Ghost Chat — Comprehensive Feature Test Suite
 // Tests ALL features: health, rooms, join/approve/reject, messaging, typing,
 // presence, deletion, panic delete, visibility, 3-state presence,
-// creator rejoin, offline message recovery, after-seen TTL, rejoin delivery.
+// creator rejoin (creatorToken-based), offline message recovery, after-seen TTL.
 // =============================================================================
 
 const { io } = require('socket.io-client');
@@ -63,6 +63,7 @@ async function setupRoom(creatorName) {
   creator.emit('create-room', { username: creatorName });
   const roomData = await roomPromise;
   await waitFor(creator, 'users-updated');
+  // roomData now includes creatorToken (secret for rejoin verification)
   return { creator, roomData };
 }
 
@@ -311,10 +312,10 @@ async function testVisibilityChange() {
 
 
 // =========================================================================
-// TEST 13: Creator Rejoin — Auto-Approve by creatorName
+// TEST 13: Creator Rejoin — Auto-Approve by creatorToken (NOT username)
 // =========================================================================
 async function testCreatorRejoin() {
-  console.log('\n🧪 Test 13: Creator Rejoin (Auto-Approve)');
+  console.log('\n🧪 Test 13: Creator Rejoin (creatorToken)');
   const { creator, roomData } = await setupRoom('Alice');
   const { joiner } = await joinUser(creator, roomData.roomCode, 'Bob');
 
@@ -326,11 +327,11 @@ async function testCreatorRejoin() {
   // Wait a beat for cleanup
   await new Promise((r) => setTimeout(r, 300));
 
-  // Creator rejoins with same username "Alice" — should be auto-approved
+  // Creator rejoins with creatorToken — should be auto-approved
   const creator2 = await createClient('creator2');
   const approvedP = waitFor(creator2, 'join-approved');
   const rejoinedP = waitFor(joiner, 'user-rejoined');
-  creator2.emit('join-request', { roomCode: roomData.roomCode, username: 'Alice' });
+  creator2.emit('join-request', { roomCode: roomData.roomCode, username: 'Alice', creatorToken: roomData.creatorToken });
 
   const approved = await approvedP;
   assert(approved.isCreator === true, 'Rejoined creator gets isCreator=true');
@@ -399,11 +400,11 @@ async function testCreatorRejoinMissedMessages() {
   joiner.emit('send-message', { roomCode: roomData.roomCode, encryptedContent: 'Creator missed this', ttl: '5m' });
   await msgP;
 
-  // Creator rejoins with same username
+  // Creator rejoins with creatorToken
   const creator2 = await createClient('creator2');
   const approvedP = waitFor(creator2, 'join-approved');
   const missedP = waitFor(creator2, 'new-message', 5000);
-  creator2.emit('join-request', { roomCode: roomData.roomCode, username: 'Alice' });
+  creator2.emit('join-request', { roomCode: roomData.roomCode, username: 'Alice', creatorToken: roomData.creatorToken });
 
   await approvedP;
   const missed = await missedP;

@@ -80,7 +80,7 @@ async function createRoomHelper(username = 'Creator') {
   client.emit('create-room', { username });
   const data = await waitForEvent(client, 'room-created');
   await waitForEvent(client, 'users-updated');
-  return { client, roomCode: data.roomCode, userId: data.userId, username: data.username };
+  return { client, roomCode: data.roomCode, userId: data.userId, username: data.username, creatorToken: data.creatorToken };
 }
 
 // Join a room (approved) and return { client, userId, username }
@@ -295,13 +295,13 @@ async function testJoinRequestFlow() {
   const noReqErr = await waitForEvent(creator.client, 'error-message');
   assert(noReqErr.message === 'Join request not found', 'Error for non-existent join request');
 
-  // Join with same username as creator — triggers auto-approve (creator rejoin)
+  // Join with same username as creator — should NOT auto-approve (username is NOT identity)
   const dupeUser = createClient();
   await waitForEvent(dupeUser, 'connect');
   await wait(50);
   dupeUser.emit('join-request', { roomCode: creator.roomCode, username: 'Creator' });
-  const dupeApproved = await waitForEvent(dupeUser, 'join-approved');
-  assert(dupeApproved.isCreator === true, 'Same username as creator triggers auto-approve');
+  const dupeReq = await waitForEvent(dupeUser, 'join-requested');
+  assert(dupeReq.username === 'Creator', 'Same username as creator goes through normal join (not auto-approved)');
 
   // Empty room code
   const emptyCode = createClient();
@@ -994,8 +994,6 @@ async function testRejoinActiveState() {
   await waitForEvent(bob2, 'connect');
   await wait(50);
 
-  const stateP = waitForEvent(creator.client, 'user-state-changed');
-  const rejoinedP = waitForEvent(creator.client, 'user-rejoined');
   bob2.emit('join-request', { roomCode: creator.roomCode, username: 'Bob' });
   // Bob is not creator, so needs approval
   const reqs = await waitForEvent(creator.client, 'join-requests-updated');
@@ -1013,6 +1011,68 @@ async function testRejoinActiveState() {
   assert(state2.username === 'Bob', 'Active state is for Bob');
 
   disconnectAll(creator.client, bob2);
+  await wait(100);
+}
+
+async function testCreatorIdentityAndAbsence() {
+  console.log('\n🧪 Test Suite: Creator Identity & Absence');
+
+  // Same username as creator WITHOUT creatorToken → should NOT auto-approve
+  const creator = await createRoomHelper('Alice');
+  const joiner = await joinRoomHelper(creator.roomCode, 'Bob');
+  const reqs = await waitForEvent(creator.client, 'join-requests-updated');
+  const pid = Object.keys(reqs)[0];
+  creator.client.emit('approve-join', { roomCode: creator.roomCode, userId: pid });
+  await waitForEvent(joiner.client, 'join-approved');
+  await wait(100);
+
+  // Creator disconnects
+  const leftP = waitForEvent(joiner.client, 'user-left');
+  creator.client.disconnect();
+  await leftP;
+  await wait(300);
+
+  // Someone joins with same username "Alice" but NO creatorToken → blocked (no creator available)
+  const imposter = createClient();
+  await waitForEvent(imposter, 'connect');
+  await wait(50);
+  imposter.emit('join-request', { roomCode: creator.roomCode, username: 'Alice' });
+  const impErr = await waitForEvent(imposter, 'error-message');
+  assert(impErr.message === 'Room creator is not available to approve your request', 'Same username without creatorToken is blocked when creator absent');
+
+  // Real creator rejoins with creatorToken → auto-approved even when offline
+  const creator2 = createClient();
+  await waitForEvent(creator2, 'connect');
+  await wait(50);
+  const approvedP = waitForEvent(creator2, 'join-approved');
+  creator2.emit('join-request', { roomCode: creator.roomCode, username: 'Alice', creatorToken: creator.creatorToken });
+  const approved = await approvedP;
+  assert(approved.isCreator === true, 'Real creator with creatorToken auto-approved');
+  assert(!!approved.creatorToken, 'CreatorToken returned on rejoin');
+
+  // Wrong creatorToken → treated as normal user (needs approval)
+  const wrongToken = createClient();
+  await waitForEvent(wrongToken, 'connect');
+  await wait(50);
+  wrongToken.emit('join-request', { roomCode: creator.roomCode, username: 'Eve', creatorToken: 'wrong-token-12345' });
+  const wtReq = await waitForEvent(wrongToken, 'join-requested');
+  assert(wtReq.username === 'Eve', 'Wrong creatorToken goes through normal join flow');
+
+  // Creator absent → join blocked
+  const room2 = await createRoomHelper('Host');
+  const leftP2 = waitForEvent(room2.client, 'disconnect');
+  room2.client.disconnect();
+  await leftP2;
+  await wait(300);
+
+  const blocked = createClient();
+  await waitForEvent(blocked, 'connect');
+  await wait(50);
+  blocked.emit('join-request', { roomCode: room2.roomCode, username: 'Newcomer' });
+  const blockErr = await waitForEvent(blocked, 'error-message');
+  assert(blockErr.message === 'Room creator is not available to approve your request', 'Join blocked when creator absent');
+
+  disconnectAll(imposter, creator2, wrongToken, blocked);
   await wait(100);
 }
 
@@ -1262,13 +1322,13 @@ async function testCreatorRejoinAndNoDuplicate() {
   await leftP;
   await wait(300);
 
-  // Creator rejoins with same username — auto-approved
+  // Creator rejoins with creatorToken — auto-approved (NOT by username)
   const creator2 = createClient();
   await waitForEvent(creator2, 'connect');
   await wait(50);
   const approvedP = waitForEvent(creator2, 'join-approved');
   const rejoinedP = waitForEvent(joiner.client, 'user-rejoined');
-  creator2.emit('join-request', { roomCode: creator.roomCode, username: 'Alice' });
+  creator2.emit('join-request', { roomCode: creator.roomCode, username: 'Alice', creatorToken: creator.creatorToken });
   const approved = await approvedP;
   const rejoined = await rejoinedP;
   assert(approved.isCreator === true, 'Rejoined creator gets isCreator=true');
@@ -1327,7 +1387,7 @@ async function testCreatorRejoinAndNoDuplicate() {
   await waitForEvent(host3, 'connect');
   await wait(50);
   const approvedP2 = waitForEvent(host3, 'join-approved');
-  host3.emit('join-request', { roomCode: '  ' + host2.roomCode + '  ', username: 'Host' });
+  host3.emit('join-request', { roomCode: '  ' + host2.roomCode + '  ', username: 'Host', creatorToken: host2.creatorToken });
   const approved2 = await approvedP2;
   assert(approved2.isCreator === true, 'Creator rejoin with whitespace-padded code works');
 
@@ -1403,7 +1463,7 @@ async function testOfflineMessageRecovery() {
   const missedCreator = [];
   host2.on('new-message', (m) => missedCreator.push(m));
   const approvedP = waitForEvent(host2, 'join-approved');
-  host2.emit('join-request', { roomCode: host.roomCode, username: 'Creator2' });
+  host2.emit('join-request', { roomCode: host.roomCode, username: 'Creator2', creatorToken: host.creatorToken });
   await approvedP;
   await wait(1000);
   assert(missedCreator.length >= 1, 'Creator receives missed messages on rejoin');
@@ -1501,6 +1561,7 @@ async function runAll() {
     await testOfflineMessageRecovery();
     await testRoomCodeTrimming();
     await testRejoinActiveState();
+    await testCreatorIdentityAndAbsence();
     await testEdgeCasesAndStability();
     await testMultipleUsersConcurrency();
     await testCleanExit();

@@ -3,6 +3,13 @@
 // Handles room creation, join requests (creator-approved), approval/rejection,
 // user disconnect cleanup, and presence tracking.
 //
+// Identity model:
+//   - userId (nanoid, 12 chars) = unique per session, assigned by server
+//   - creatorToken (nanoid, 16 chars) = secret token given ONLY to the creator
+//   - username = display name only, NOT used for identity or authorization
+//   - Creator rejoin: verified by creatorToken, NOT by username match
+//   - Same username as creator: treated as different user, needs approval
+//
 // socketUsers Map tracks the mapping from Socket.IO socket IDs to user data,
 // enabling us to look up which room and identity a socket belongs to.
 // =============================================================================
@@ -43,18 +50,21 @@ function generateUserId() {
 async function handleCreateRoom(socket, io, { username }) {
   const roomCode = generateRoomCode();
   const userId = generateUserId();
+  const creatorToken = nanoid(16); // Secret token — only creator knows this
 
-  await createRoom(roomCode, userId, username);
+  await createRoom(roomCode, userId, username, creatorToken);
   await addUserToRoom(roomCode, userId, username);
 
   socket.join(roomCode);
   socketUsers.set(socket.id, { roomId: roomCode, userId, username });
 
+  // Send creatorToken ONLY to the creator (never broadcast to room)
   socket.emit('room-created', {
     roomCode,
     userId,
     username,
     isCreator: true,
+    creatorToken, // Client stores this for rejoin verification
   });
 
   const users = await getRoomUsers(roomCode);
@@ -64,7 +74,7 @@ async function handleCreateRoom(socket, io, { username }) {
 // ---------------------------------------------------------------------------
 // Join request: user asks to join, creator must approve. User is "pending".
 // ---------------------------------------------------------------------------
-async function handleJoinRequest(socket, io, { roomCode, username }) {
+async function handleJoinRequest(socket, io, { roomCode, username, creatorToken }) {
   const trimmedCode = (roomCode || '').trim();
   const room = await getRoom(trimmedCode);
 
@@ -73,32 +83,30 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
     return;
   }
 
-  // Check if this is the room creator rejoining (match by creatorName)
-  const isCreatorRejoin = room.creatorName === username;
+  // ---- Creator rejoin: verified by creatorToken (NOT username) ----
+  // The creatorToken is a secret only the original creator possesses.
+  // Username alone is NEVER sufficient for auto-approve.
+  const isCreatorRejoin = creatorToken && room.creatorToken && creatorToken === room.creatorToken;
 
   if (isCreatorRejoin) {
-    // Auto-approve creator — no waiting
     const userId = generateUserId();
     const oldCreatorId = room.creator;
 
     // Remove any stale entries for this username before adding fresh
     await removeUserByUsername(trimmedCode, username);
-    // Also clean up any stale socketUsers entries for this username+room
     cleanStaleSocketEntries(trimmedCode, username);
 
     socket.join(trimmedCode);
     socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
     await addUserToRoom(trimmedCode, userId, username);
-    await updateRoomCreator(trimmedCode, userId);
+    await updateRoomCreator(trimmedCode, userId); // keep same creatorToken
     await refreshRoomTTL(trimmedCode);
 
-    socket.emit('join-approved', { roomCode: trimmedCode, userId, username, isCreator: true, creatorId: userId });
+    socket.emit('join-approved', { roomCode: trimmedCode, userId, username, isCreator: true, creatorId: userId, creatorToken });
 
     const users = await getRoomUsers(trimmedCode);
     io.to(trimmedCode).emit('users-updated', { users, creator: userId });
     io.to(trimmedCode).emit('user-rejoined', { userId, username });
-
-    // Broadcast active state so UI doesn't show as inactive after rejoin
     io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
 
     // Deliver missed messages (buffered under old creator userId)
@@ -109,11 +117,19 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
     return;
   }
 
+  // ---- Normal user join: requires creator approval ----
+  // Check if creator is online to approve
+  const creatorSocketId = findSocketByUserId(io, room.creator, trimmedCode);
+  if (!creatorSocketId) {
+    socket.emit('error-message', { message: 'Room creator is not available to approve your request' });
+    return;
+  }
+
   const userId = generateUserId();
 
-  // Remove any stale entries for this username before adding pending
-  await removeUserByUsername(trimmedCode, username);
-  cleanStaleSocketEntries(trimmedCode, username);
+  // NOTE: Do NOT call removeUserByUsername here — username is display-only.
+  // Another user with the same name may already be in the room legitimately.
+  // Stale entry cleanup only happens on confirmed-identity rejoin (creatorToken or rejoin-room).
 
   socketUsers.set(socket.id, { roomId: trimmedCode, userId, username, pending: true });
 
@@ -122,11 +138,8 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
   socket.emit('join-requested', { roomCode: trimmedCode, userId, username });
 
   // Notify creator
-  const creatorSocketId = findSocketByUserId(io, room.creator, trimmedCode);
-  if (creatorSocketId) {
-    const requests = await getJoinRequests(trimmedCode);
-    io.to(creatorSocketId).emit('join-requests-updated', requests);
-  }
+  const requests = await getJoinRequests(trimmedCode);
+  io.to(creatorSocketId).emit('join-requests-updated', requests);
 }
 
 // ---------------------------------------------------------------------------

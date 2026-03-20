@@ -78,8 +78,8 @@ async function initRedis() {
 }
 
 // ---- Room helpers ----
-async function createRoom(roomId, creatorId, creatorName) {
-  const data = { creator: creatorId, creatorName, createdAt: Date.now().toString() };
+async function createRoom(roomId, creatorId, creatorName, creatorToken) {
+  const data = { creator: creatorId, creatorName, creatorToken, createdAt: Date.now().toString() };
   if (useMemory) {
     memSet(`${P}room:${roomId}`, data, 6 * 60 * 60);
   } else {
@@ -97,15 +97,18 @@ async function getRoom(roomId) {
   return data && data.creator ? data : null;
 }
 
-async function updateRoomCreator(roomId, newCreatorId) {
+async function updateRoomCreator(roomId, newCreatorId, newCreatorToken) {
   if (useMemory) {
     const data = memGet(`${P}room:${roomId}`);
     if (data) {
       data.creator = newCreatorId;
+      if (newCreatorToken) data.creatorToken = newCreatorToken;
       memSet(`${P}room:${roomId}`, data, 6 * 60 * 60);
     }
   } else {
-    await redis.hset(`${P}room:${roomId}`, 'creator', newCreatorId);
+    const updates = { creator: newCreatorId };
+    if (newCreatorToken) updates.creatorToken = newCreatorToken;
+    await redis.hset(`${P}room:${roomId}`, updates);
   }
 }
 

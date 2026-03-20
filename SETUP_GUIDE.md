@@ -346,6 +346,7 @@ node test-comprehensive.js
 | Offline Message Recovery | 6 |
 | Room Code Trimming | 4 |
 | Rejoin Active State | 2 |
+| Creator Identity & Absence | 5 |
 | Edge Cases & Stability | 9 |
 | Multiple Users & Concurrency | 8 |
 | Clean Exit | 3 |
