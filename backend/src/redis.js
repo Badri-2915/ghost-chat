@@ -248,12 +248,20 @@ async function deleteMessage(roomId, messageId) {
 // ---- Missed message buffer (for offline users) ----
 async function bufferMissedMessage(roomId, userId, messageData) {
   const key = `${P}missed:${roomId}:${userId}`;
+  const MAX_BUFFERED = 3; // Keep only last 3 messages per user
+  
   if (useMemory) {
     const msgs = memGet(key) || [];
     msgs.push(messageData);
+    // Keep only last MAX_BUFFERED messages
+    if (msgs.length > MAX_BUFFERED) {
+      msgs.splice(0, msgs.length - MAX_BUFFERED);
+    }
     memSet(key, msgs, 30 * 60);
   } else {
     await redis.rpush(key, JSON.stringify(messageData));
+    // Keep only last MAX_BUFFERED messages
+    await redis.ltrim(key, -MAX_BUFFERED, -1);
     await redis.expire(key, 30 * 60);
   }
 }

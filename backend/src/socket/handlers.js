@@ -9,7 +9,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { storeMessage, deleteMessage, getMessage, refreshRoomTTL, bufferMissedMessage, getRoomUsers, getRoom } = require('../redis');
 const { rateLimitMessage } = require('../rateLimiter');
-const { getSocketUser } = require('./rooms');
+const { getSocketUser, getPendingRemovals, getRecentlyRemoved } = require('./rooms');
 
 // Maximum message length (characters) — prevents abuse and memory bloat
 const MAX_MESSAGE_LENGTH = 5000;
@@ -88,10 +88,20 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, 
       const u = getSocketUser(s.id);
       if (u) connectedUserIds.add(u.userId);
     }
+    
+    // Also include users in pending removals (10s grace period)
+    const pendingRemovals = getPendingRemovals();
+    
+    // Buffer for room users who are offline
     for (const uid of Object.keys(roomUsers)) {
       if (!connectedUserIds.has(uid)) {
         await bufferMissedMessage(roomCode, uid, messageData);
       }
+    }
+    
+    // Also buffer for users in pending removals
+    for (const uid of pendingRemovals.keys()) {
+      await bufferMissedMessage(roomCode, uid, messageData);
     }
   } catch (e) {
     // Non-critical — best effort buffering

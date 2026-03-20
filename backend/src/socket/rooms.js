@@ -233,6 +233,9 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
 
   // Cancel any pending disconnect removal for this user
   cancelPendingRemoval(userId);
+  
+  // Also remove from recently removed if present
+  recentlyRemoved.delete(userId);
 
   // Register the new socket with the existing userId
   socket.join(trimmedCode);
@@ -252,7 +255,8 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
   try {
     const missed = await getMissedMessages(trimmedCode, userId);
     for (const msg of missed) socket.emit('new-message', msg);
-  } catch (e) { /* best effort */ }
+  } catch (e) { /* best effort */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +264,9 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
 // ---------------------------------------------------------------------------
 // Pending removal timers — allows grace period for offline buffering
 const pendingRemovals = new Map();
+
+// Recently removed users — for extended message buffering (5 minutes)
+const recentlyRemoved = new Map(); // userId -> removal timestamp
 
 function cancelPendingRemoval(userId) {
   const timer = pendingRemovals.get(userId);
@@ -292,6 +299,17 @@ async function handleDisconnect(socket, io) {
     pendingRemovals.delete(userId);
     await removeUserFromRoom(roomId, userId);
     
+    // Track recently removed users for extended buffering (5 minutes)
+    recentlyRemoved.set(userId, Date.now());
+    
+    // Clean up old entries (older than 5 minutes)
+    const now = Date.now();
+    for (const [uid, timestamp] of recentlyRemoved.entries()) {
+      if (now - timestamp > 5 * 60 * 1000) {
+        recentlyRemoved.delete(uid);
+      }
+    }
+    
     // Check if room is now empty and destroy it completely
     const users = await getRoomUsers(roomId);
     if (Object.keys(users).length === 0) {
@@ -318,6 +336,16 @@ function findSocketByUserId(io, userId, roomCode) {
     }
   }
   return null;
+}
+
+// Utility: get pending removals (for message buffering)
+function getPendingRemovals() {
+  return pendingRemovals;
+}
+
+// Utility: get recently removed users (for extended message buffering)
+function getRecentlyRemoved() {
+  return recentlyRemoved;
 }
 
 // Utility: remove stale socketUsers entries for a given username + room
