@@ -1570,6 +1570,42 @@ async function testRoomAutoDestruction() {
   await wait(100);
 }
 
+async function testPresenceAndDisconnect() {
+  console.log('\n🧪 Test Suite: Presence & Disconnect');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Bob goes inactive
+  const inactiveP = waitForEvent(creator.client, 'user-state-changed');
+  joiner.client.emit('user_inactive');
+  const inactive = await inactiveP;
+  assert(inactive.state === 'inactive', 'Inactive state broadcast');
+  assert(inactive.username === 'Bob', 'Inactive user is Bob');
+
+  // Bob goes active again
+  const activeP = waitForEvent(creator.client, 'user-state-changed');
+  joiner.client.emit('user_active');
+  const active = await activeP;
+  assert(active.state === 'active', 'Active state broadcast');
+  assert(active.username === 'Bob', 'Active user is Bob');
+
+  // Bob disconnects - should go offline immediately
+  const leftP = waitForEvent(creator.client, 'user-left');
+  const offlineP = waitForEvent(creator.client, 'user-state-changed');
+  joiner.client.disconnect();
+  const left = await leftP;
+  const offline = await offlineP;
+  assert(left.username === 'Bob', 'User left event shows Bob');
+  assert(offline.state === 'offline', 'Offline state broadcast on disconnect');
+  assert(offline.username === 'Bob', 'Offline user is Bob');
+
+  // Wait for Redis cleanup
+  await wait(200);
+
+  disconnectAll(creator.client);
+  await wait(100);
+}
+
 async function testCleanExit() {
   console.log('\n🧪 Test Suite: Clean Exit');
 
@@ -1619,6 +1655,7 @@ async function runAll() {
     await testEdgeCasesAndStability();
     await testMultipleUsersConcurrency();
     await testRoomAutoDestruction();
+    await testPresenceAndDisconnect();
     await testCleanExit();
   } catch (err) {
     console.error(`\n💥 Test suite crashed: ${err.message}`);

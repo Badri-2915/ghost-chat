@@ -16,12 +16,14 @@ export default function UserList() {
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-white/50 text-xs font-medium uppercase tracking-wider px-1">
         <Users className="w-3.5 h-3.5" />
-        <span>Online ({userEntries.length})</span>
+        <span>In Room ({userEntries.length})</span>
       </div>
       <div className="space-y-1">
         {userEntries.map(([id, data]) => {
           const name = typeof data === 'string' ? data : data.username || 'Unknown';
-          const isInactive = userStates[id] === 'inactive';
+          const userState = userStates[id] || 'active';
+          const isInactive = userState === 'inactive';
+          const isOffline = userState === 'offline';
           return (
             <div
               key={id}
@@ -30,12 +32,17 @@ export default function UserList() {
               }`}
             >
               <Circle className={`w-2 h-2 shrink-0 ${
-                isInactive
+                isOffline
+                  ? 'fill-white/10 text-white/10'
+                  : isInactive
                   ? 'fill-white/20 text-white/20'
                   : 'fill-green-400 text-green-400'
               }`} />
-              <span className={`truncate ${isInactive ? 'opacity-50' : ''}`}>{name}</span>
-              {isInactive && (
+              <span className={`truncate ${isOffline || isInactive ? 'opacity-50' : ''}`}>{name}</span>
+              {isOffline && (
+                <span className="text-[10px] text-white/20 italic">offline</span>
+              )}
+              {isInactive && !isOffline && (
                 <span className="text-[10px] text-white/20 italic">inactive</span>
               )}
               {id === creatorId && (

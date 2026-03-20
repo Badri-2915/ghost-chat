@@ -236,8 +236,15 @@ export function ChatProvider({ children }) {
 
     const handleReconnect = () => {
       if (screen === 'chat' && roomCode && userId && username) {
-        emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
-        console.log('[Reconnect] Rejoining room:', roomCode);
+        // If we have creatorToken, use join-request for creator rejoin verification
+        // Otherwise use rejoin-room for normal user rejoin
+        if (creatorToken) {
+          emit('join-request', { roomCode, username, creatorToken });
+          console.log('[Reconnect] Creator rejoining room:', roomCode);
+        } else {
+          emit('rejoin-room', { roomCode, userId, username });
+          console.log('[Reconnect] User rejoining room:', roomCode);
+        }
       }
     };
 

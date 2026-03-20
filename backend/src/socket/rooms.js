@@ -282,8 +282,9 @@ async function handleDisconnect(socket, io) {
   const otherSocket = findSocketByUserId(io, userId, roomId);
   if (otherSocket) return; // Still connected via another socket — skip cleanup
 
-  // Emit user-left immediately for UI
+  // Emit user-left and offline state immediately for UI
   io.to(roomId).emit('user-left', { userId, username });
+  io.to(roomId).emit('user-state-changed', { userId, username, state: 'offline' });
 
   // Delay Redis removal by 10s to allow offline message buffering.
   // If the user rejoins within 10s, the timer is cancelled.
