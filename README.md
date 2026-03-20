@@ -29,7 +29,8 @@ Socket.IO Client ←→ Socket.IO Server (Node.js + Express)
                             +── Delivery & read receipts
                             +── Panic delete (wipe all messages)
                             +── 3-state presence (active/inactive/offline)
-                            +── Visibility & screenshot detection
+                            +── Tab visibility awareness
+                            +── Delete permissions (sender-only + creator moderation)
                             +── Offline message buffering & delivery
                             |
                             v
@@ -72,7 +73,8 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Deep Link Sharing** | Share `https://badri.online/r/CODE` — auto-fills room code on open |
 | **Creator Rejoin** | Room creator auto-approved on rejoin (no waiting screen) |
 | **Offline Recovery** | Messages buffered in Redis while user is offline, delivered on rejoin |
-| **Screenshot Awareness** | Best-effort <3s heuristic warns room members |
+| **Delete Permissions** | Only sender can delete own messages; room creator can moderate |
+| **Message Length Limit** | Max 5000 characters per message (server enforced) |
 | **Rate Limiting** | Per-user message limits + per-IP connection limits |
 | **Message Dedup** | Duplicate messages prevented on rejoin via messageId check |
 | **No Duplicate Users** | Stale sessions cleaned on rejoin, single entry per username |
@@ -118,8 +120,8 @@ ghost-chat/
 │   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect
 │   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
 │   ├── static/                          # Built frontend (production)
-│   ├── test.js                          # Quick feature tests (48 assertions)
-│   └── test-comprehensive.js            # Full test suite (151 assertions)
+│   ├── test.js                          # Quick feature tests (46 assertions)
+│   └── test-comprehensive.js            # Full test suite (157 assertions)
 ├── frontend/
 │   ├── public/
 │   │   ├── sitemap.xml                  # SEO sitemap for Google
@@ -201,11 +203,11 @@ cd frontend && npm run dev   # Frontend dev server
 ```bash
 # Start server first, then:
 cd backend
-node test.js                  # Quick suite: 48 assertions
-node test-comprehensive.js    # Full suite: 151 assertions
+node test.js                  # Quick suite: 46 assertions
+node test-comprehensive.js    # Full suite: 157 assertions
 ```
 
-### Test Coverage (19 test suites, 151 assertions)
+### Test Coverage (22 test suites, 157 assertions)
 
 | Suite | Assertions | Covers |
 |-------|------------|--------|
@@ -220,11 +222,14 @@ node test-comprehensive.js    # Full suite: 151 assertions
 | Rate Limiting | 4 | Connection/message limits, burst under limit |
 | Presence & Disconnect | 6 | User left, creator left, multi-leave, pending disconnect |
 | 3-State Presence | 7 | Active/inactive broadcast, rapid toggles, creator state |
-| Visibility & Screenshot | 10 | Hide/show, screenshot warning, rapid, outsider, creator |
+| Visibility | 6 | Hide/show, rapid, outsider, creator |
+| Delete Permissions | 4 | Sender-only, creator moderation, non-sender rejected |
+| Message Constraints | 4 | Max 5000 chars, oversized rejected, empty ok, object ok |
 | Creator Rejoin & No Duplicates | 5 | Auto-approve, no duplicate users, whitespace-padded code |
 | Offline Message Recovery | 6 | Missed messages, creator rejoin + missed, content order |
 | Room Code Trimming | 4 | Whitespace join, whitespace rejoin, empty-after-trim |
-| Edge Cases & Stability | 9 | Unicode, 10K chars, burst 20 msgs, post-disconnect, concurrent ops |
+| Rejoin Active State | 2 | User broadcasts active on rejoin, no stale inactive |
+| Edge Cases & Stability | 9 | Unicode, long msgs, burst 20 msgs, post-disconnect, concurrent ops |
 | Multiple Users & Concurrency | 8 | 3-user broadcast, cross-room isolation, concurrent creation |
 | Clean Exit | 3 | Leave notification, Redis cleanup, graceful disconnect |
 
@@ -243,7 +248,7 @@ node test-comprehensive.js    # Full suite: 151 assertions
 | `join-approved` / `join-rejected` | Server → Joiner | Result of join request |
 | `send-message` | Client → Server | Send encrypted message (+ optional replyTo) |
 | `new-message` | Server → Room | Broadcast message to all room members |
-| `delete-message` | Client → Server | Delete a specific message |
+| `delete-message` | Client → Server | Delete a message (sender or creator only) |
 | `message-deleted` | Server → Room | Message deleted notification |
 | `panic-delete` | Client → Server | Wipe all messages in room |
 | `panic-delete` | Server → Room | All messages wiped notification |
@@ -256,8 +261,6 @@ node test-comprehensive.js    # Full suite: 151 assertions
 | `user_inactive` | Client → Server | User switched tab (3-state) |
 | `user_active` | Client → Server | User returned to tab (3-state) |
 | `user-state-changed` | Server → Room | Broadcast active/inactive state |
-| `screenshot-warning` | Client → Server | Screenshot detected (<3s heuristic) |
-| `screenshot-warning` | Server → Room | Screenshot warning broadcast |
 | `rejoin-room` | Client → Server | Rejoin after disconnect (delivers missed msgs) |
 | `user-rejoined` | Server → Room | User reconnected notification |
 | `users-updated` | Server → Room | Online users list changed |
@@ -351,14 +354,15 @@ The architecture is designed to scale — but the current deployment is right-si
 - No user accounts, no emails, no personal data
 - Messages auto-delete from all clients and server
 - Rate limiting prevents spam and abuse (30 msgs/min, 200 conn/min)
+- Delete permissions: only sender can delete own messages (creator can moderate)
+- Message length capped at 5000 characters (server enforced)
 - Tab detection warns when users switch away
-- Screenshot detection (best-effort) warns room members
 - Connection loss overlay with auto-reconnect
 - Leave room functionality with full state cleanup
 
 ### Honest Limitations:
 - Cannot prevent network-level metadata visibility (IP addresses)
-- Cannot fully prevent screenshots on all devices
+- Cannot prevent screenshots (removed detection — not feasible in web apps)
 - Messages are permanently lost after deletion (by design)
 - Room key is derived from room code — anyone with the code can decrypt
 - Requires trust in client-side encryption implementation

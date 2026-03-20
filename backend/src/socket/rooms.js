@@ -98,6 +98,9 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
     io.to(trimmedCode).emit('users-updated', { users, creator: userId });
     io.to(trimmedCode).emit('user-rejoined', { userId, username });
 
+    // Broadcast active state so UI doesn't show as inactive after rejoin
+    io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
+
     // Deliver missed messages (buffered under old creator userId)
     try {
       const missed = await getMissedMessages(trimmedCode, oldCreatorId);
@@ -227,6 +230,9 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
   const users = await getRoomUsers(trimmedCode);
   io.to(trimmedCode).emit('users-updated', { users, creator: room.creator });
   io.to(trimmedCode).emit('user-rejoined', { userId, username });
+
+  // Broadcast active state so UI doesn't show as inactive after rejoin
+  io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
 
   // Deliver missed messages for this user
   try {

@@ -3,6 +3,9 @@
 // Manages all chat state: user identity, room info, messages, join requests,
 // typing indicators, toasts, reply state, visibility awareness, and provides
 // action functions (create/join room, send message, panic delete, etc.).
+//
+// Presence states: active | inactive (tab switched) | offline (disconnected)
+// Delete permission: only sender can delete own messages (server enforces).
 // All Socket.IO event listeners are registered here.
 // =============================================================================
 
@@ -34,7 +37,6 @@ export function ChatProvider({ children }) {
   const [toasts, setToasts] = useState([]);               // toast notification queue
   const [userVisibility, setUserVisibility] = useState({}); // userId -> isVisible
   const [userStates, setUserStates] = useState({});           // userId -> 'active'|'inactive'
-  const [screenshotAlerts, setScreenshotAlerts] = useState([]); // screenshot warnings
 
   const roomKeyRef = useRef(null);
 
@@ -206,15 +208,6 @@ export function ChatProvider({ children }) {
         }
       },
 
-      // Screenshot awareness (best-effort, minimal)
-      'screenshot-warning': ({ username: uname, timestamp }) => {
-        setScreenshotAlerts((prev) => [...prev, { username: uname, timestamp }]);
-        addToast(`${uname} may have taken a screenshot`, 'danger', 5000);
-        setTimeout(() => {
-          setScreenshotAlerts((prev) => prev.filter((a) => a.timestamp !== timestamp));
-        }, 10000);
-      },
-
       'error-message': ({ message }) => {
         setError(message);
         setTimeout(() => setError(''), 5000);
@@ -251,27 +244,15 @@ export function ChatProvider({ children }) {
   }, [socket, screen, roomCode, userId, username, emit]);
 
   // ---- Tab visibility & 3-state presence ----
-  // Emits user_inactive / user_active for presence state.
-  // Also triggers screenshot warning if tab hidden < 3s (heuristic).
+  // Emits user_inactive / user_active for presence state tracking.
   useEffect(() => {
     if (!roomCode || screen !== 'chat') return;
 
-    let lastHidden = 0;
-
     const handleVisibility = () => {
       if (document.hidden) {
-        lastHidden = Date.now();
         emit('user_inactive');
       } else {
         emit('user_active');
-        // Screenshot heuristic: hidden < 3s might be screenshot shortcut
-        if (lastHidden > 0) {
-          const awayMs = Date.now() - lastHidden;
-          if (awayMs < 3000) {
-            emit('screenshot-warning', { roomCode });
-          }
-          lastHidden = 0;
-        }
       }
     };
 
@@ -340,9 +321,10 @@ export function ChatProvider({ children }) {
     [emit, roomCode, selectedTTL, replyTo]
   );
 
+  // Delete message: pass senderId so server can enforce sender-only permission
   const deleteMessage = useCallback(
-    (messageId) => {
-      emit('delete-message', { roomCode, messageId });
+    (messageId, senderId) => {
+      emit('delete-message', { roomCode, messageId, senderId });
     },
     [emit, roomCode]
   );
@@ -425,7 +407,6 @@ export function ChatProvider({ children }) {
     creatorId,
     userVisibility,
     userStates,
-    screenshotAlerts,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

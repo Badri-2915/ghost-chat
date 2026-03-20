@@ -34,7 +34,6 @@ const {
   handleDeleteMessage,
   handlePanicDelete,
   handleVisibilityChange,
-  handleScreenshotWarning,
 } = require('./socket/handlers');
 
 const app = express();
@@ -105,9 +104,8 @@ io.on('connection', async (socket) => {
   socket.on('typing-start', (data) => handleTypingStart(socket, io, data));
   socket.on('typing-stop', (data) => handleTypingStop(socket, io, data));
 
-  // Awareness events (tab visibility, screenshot detection)
+  // Awareness events (tab visibility)
   socket.on('visibility-change', (data) => handleVisibilityChange(socket, io, data));
-  socket.on('screenshot-warning', (data) => handleScreenshotWarning(socket, io, data));
 
   // User activity state (3-state: active / inactive / offline)
   socket.on('user_inactive', () => handleUserInactive(socket, io));

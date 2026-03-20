@@ -1,7 +1,7 @@
 // =============================================================================
 // Ghost Chat — Comprehensive Feature Test Suite
 // Tests ALL features: health, rooms, join/approve/reject, messaging, typing,
-// presence, deletion, panic delete, visibility, screenshot, 3-state presence,
+// presence, deletion, panic delete, visibility, 3-state presence,
 // creator rejoin, offline message recovery, after-seen TTL, rejoin delivery.
 // =============================================================================
 
@@ -309,22 +309,6 @@ async function testVisibilityChange() {
   creator.disconnect(); joiner.disconnect();
 }
 
-// =========================================================================
-// TEST 12: Screenshot Warning Event
-// =========================================================================
-async function testScreenshotWarning() {
-  console.log('\n🧪 Test 12: Screenshot Warning');
-  const { creator, roomData } = await setupRoom('Alice');
-  const { joiner } = await joinUser(creator, roomData.roomCode, 'Bob');
-
-  const ssP = waitFor(creator, 'screenshot-warning');
-  joiner.emit('screenshot-warning', { roomCode: roomData.roomCode });
-  const ss = await ssP;
-  assert(ss.username === 'Bob', 'Screenshot warning from Bob');
-  assert(typeof ss.timestamp === 'number', 'Screenshot has timestamp');
-
-  creator.disconnect(); joiner.disconnect();
-}
 
 // =========================================================================
 // TEST 13: Creator Rejoin — Auto-Approve by creatorName
@@ -487,7 +471,6 @@ async function run() {
     await testPanicDelete();
     await testThreeStatePresence();
     await testVisibilityChange();
-    await testScreenshotWarning();
     await testCreatorRejoin();
     await testOfflineMessageRecovery();
     await testCreatorRejoinMissedMessages();

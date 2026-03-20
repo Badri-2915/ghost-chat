@@ -339,9 +339,16 @@ node test-comprehensive.js
 | Typing Indicators | 8 |
 | Presence & Disconnect | 6 |
 | Rate Limiting | 4 |
-| Visibility & Screenshot | 10 |
+| Visibility | 6 |
+| Delete Permissions | 4 |
+| Message Constraints | 4 |
+| Creator Rejoin & No Duplicates | 5 |
+| Offline Message Recovery | 6 |
+| Room Code Trimming | 4 |
+| Rejoin Active State | 2 |
 | Edge Cases & Stability | 9 |
 | Multiple Users & Concurrency | 8 |
+| Clean Exit | 3 |
 
 ---
 

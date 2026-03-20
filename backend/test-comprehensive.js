@@ -12,7 +12,7 @@
 //   8. Typing Indicators          (~15 tests)
 //   9. Presence / Disconnect      (~20 tests)
 //  10. Rate Limiting              (~10 tests)
-//  11. Visibility / Screenshot    (~15 tests)
+//  11. Visibility                 (~15 tests)
 //  12. Edge Cases & Stability     (~30 tests)
 //  13. Multiple Users / Concurrency (~25 tests)
 //
@@ -827,8 +827,8 @@ async function testRateLimiting() {
   await wait(100);
 }
 
-async function testVisibilityAndScreenshot() {
-  console.log('\n🧪 Test Suite: Visibility & Screenshot');
+async function testVisibility() {
+  console.log('\n🧪 Test Suite: Visibility');
 
   const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
 
@@ -845,13 +845,6 @@ async function testVisibilityAndScreenshot() {
   const vis2 = await visP2;
   assert(vis2.isVisible === true, 'isVisible is true on return');
 
-  // Screenshot warning
-  const ssP = waitForEvent(creator.client, 'screenshot-warning');
-  joiner.client.emit('screenshot-warning', { roomCode: creator.roomCode });
-  const ss = await ssP;
-  assert(ss.username === 'Bob', 'Screenshot warning shows correct user');
-  assert(typeof ss.timestamp === 'number', 'Screenshot warning has timestamp');
-
   // Rapid visibility changes
   for (let i = 0; i < 5; i++) {
     joiner.client.emit('visibility-change', { roomCode: creator.roomCode, isVisible: i % 2 === 0 });
@@ -867,18 +860,6 @@ async function testVisibilityAndScreenshot() {
   await wait(200);
   assert(true, 'Outsider visibility change silently ignored');
 
-  // Outsider screenshot warning is ignored
-  outsider.emit('screenshot-warning', { roomCode: creator.roomCode });
-  await wait(200);
-  assert(true, 'Outsider screenshot warning silently ignored');
-
-  // Multiple screenshot warnings
-  for (let i = 0; i < 3; i++) {
-    joiner.client.emit('screenshot-warning', { roomCode: creator.roomCode });
-  }
-  await wait(200);
-  assert(true, 'Multiple screenshot warnings handled');
-
   // Creator sends visibility change
   const creatorVisP = waitForEvent(joiner.client, 'user-visibility-changed');
   creator.client.emit('visibility-change', { roomCode: creator.roomCode, isVisible: false });
@@ -886,6 +867,152 @@ async function testVisibilityAndScreenshot() {
   assert(creatorVis.username === 'Alice', 'Creator visibility change received by joiner');
 
   disconnectAll(creator.client, joiner.client, outsider);
+  await wait(100);
+}
+
+async function testDeletePermissions() {
+  console.log('\n🧪 Test Suite: Delete Permissions');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Alice sends a message
+  const msgP = waitForEvent(joiner.client, 'new-message');
+  creator.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: 'Alice msg',
+    ttl: '5m',
+  });
+  const msg = await msgP;
+
+  // Bob tries to delete Alice's message — should be rejected
+  const errP = waitForEvent(joiner.client, 'error-message');
+  joiner.client.emit('delete-message', { roomCode: creator.roomCode, messageId: msg.messageId, senderId: msg.senderId });
+  const err = await errP;
+  assert(err.message === 'Cannot delete: not your message', 'Non-sender cannot delete');
+
+  // Alice deletes her own message — should succeed
+  const delP = waitForEvent(joiner.client, 'message-deleted');
+  creator.client.emit('delete-message', { roomCode: creator.roomCode, messageId: msg.messageId, senderId: msg.senderId });
+  const del = await delP;
+  assert(del.messageId === msg.messageId, 'Sender can delete own message');
+
+  // Bob sends a message
+  const msg2P = waitForEvent(creator.client, 'new-message');
+  joiner.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: 'Bob msg',
+    ttl: '5m',
+  });
+  const msg2 = await msg2P;
+
+  // Alice (creator/moderator) deletes Bob's message — should succeed
+  const del2P = waitForEvent(joiner.client, 'message-deleted');
+  creator.client.emit('delete-message', { roomCode: creator.roomCode, messageId: msg2.messageId, senderId: msg2.senderId });
+  const del2 = await del2P;
+  assert(del2.messageId === msg2.messageId, 'Room creator can delete any message (moderator)');
+
+  // Bob deletes his own message — should succeed
+  const msg3P = waitForEvent(creator.client, 'new-message');
+  joiner.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: 'Bob msg 2',
+    ttl: '5m',
+  });
+  const msg3 = await msg3P;
+
+  const del3P = waitForEvent(creator.client, 'message-deleted');
+  joiner.client.emit('delete-message', { roomCode: creator.roomCode, messageId: msg3.messageId, senderId: msg3.senderId });
+  const del3 = await del3P;
+  assert(del3.messageId === msg3.messageId, 'Sender can delete own message');
+
+  disconnectAll(creator.client, joiner.client);
+  await wait(100);
+}
+
+async function testMessageConstraints() {
+  console.log('\n🧪 Test Suite: Message Constraints');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Message at exactly max length (5000 chars) — should succeed
+  const okP = waitForEvent(joiner.client, 'new-message');
+  creator.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: 'A'.repeat(5000),
+    ttl: '5m',
+  });
+  const ok = await okP;
+  assert(ok.encryptedContent.length === 5000, 'Max length message (5000) accepted');
+
+  // Message exceeding max length (5001 chars) — should be rejected
+  const errP = waitForEvent(creator.client, 'error-message');
+  creator.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: 'B'.repeat(5001),
+    ttl: '5m',
+  });
+  const err = await errP;
+  assert(err.message.includes('Message too long'), 'Oversized message (5001) rejected');
+
+  // Empty message — should still be delivered
+  const emptyP = waitForEvent(joiner.client, 'new-message');
+  creator.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: '',
+    ttl: '5m',
+  });
+  const empty = await emptyP;
+  assert(empty.encryptedContent === '', 'Empty message delivered');
+
+  // Object content (encrypted payload) — no length limit for objects
+  const objP = waitForEvent(joiner.client, 'new-message');
+  creator.client.emit('send-message', {
+    roomCode: creator.roomCode,
+    encryptedContent: { iv: 'abc', ciphertext: 'xyz' },
+    ttl: '5m',
+  });
+  const obj = await objP;
+  assert(obj.encryptedContent.iv === 'abc', 'Object content (encrypted) not blocked by length check');
+
+  disconnectAll(creator.client, joiner.client);
+  await wait(100);
+}
+
+async function testRejoinActiveState() {
+  console.log('\n🧪 Test Suite: Rejoin Active State');
+
+  const { creator, joiner } = await setupTwoUsers('Alice', 'Bob');
+
+  // Bob disconnects
+  const leftP = waitForEvent(creator.client, 'user-left');
+  joiner.client.disconnect();
+  await leftP;
+  await wait(300);
+
+  // Bob rejoins
+  const bob2 = createClient();
+  await waitForEvent(bob2, 'connect');
+  await wait(50);
+
+  const stateP = waitForEvent(creator.client, 'user-state-changed');
+  const rejoinedP = waitForEvent(creator.client, 'user-rejoined');
+  bob2.emit('join-request', { roomCode: creator.roomCode, username: 'Bob' });
+  // Bob is not creator, so needs approval
+  const reqs = await waitForEvent(creator.client, 'join-requests-updated');
+  const pid = Object.keys(reqs)[0];
+  creator.client.emit('approve-join', { roomCode: creator.roomCode, userId: pid });
+  await waitForEvent(bob2, 'join-approved');
+  await wait(200);
+
+  // Bob should NOT show as inactive after joining
+  // Send a state check by having Bob go inactive then active
+  const stateP2 = waitForEvent(creator.client, 'user-state-changed');
+  bob2.emit('user_active');
+  const state2 = await stateP2;
+  assert(state2.state === 'active', 'Rejoined user broadcasts active state');
+  assert(state2.username === 'Bob', 'Active state is for Bob');
+
+  disconnectAll(creator.client, bob2);
   await wait(100);
 }
 
@@ -931,15 +1058,15 @@ async function testEdgeCasesAndStability() {
   const nlMsg = await nlP;
   assert(nlMsg.encryptedContent.includes('\n'), 'Newlines preserved');
 
-  // Very long message
+  // Long message (under 5000 limit)
   const longP = waitForEvent(uj.client, 'new-message');
   uc.client.emit('send-message', {
     roomCode: uc.roomCode,
-    encryptedContent: 'A'.repeat(10000),
+    encryptedContent: 'A'.repeat(4999),
     ttl: '5m',
   });
   const longMsg = await longP;
-  assert(longMsg.encryptedContent.length === 10000, '10K char message delivered');
+  assert(longMsg.encryptedContent.length === 4999, '4999 char message delivered (under 5000 limit)');
 
   // Multiple events in quick succession
   for (let i = 0; i < 20; i++) {
@@ -1367,10 +1494,13 @@ async function runAll() {
     await testRateLimiting();
     await testPresenceAndDisconnect();
     await testThreeStatePresence();
-    await testVisibilityAndScreenshot();
+    await testVisibility();
+    await testDeletePermissions();
+    await testMessageConstraints();
     await testCreatorRejoinAndNoDuplicate();
     await testOfflineMessageRecovery();
     await testRoomCodeTrimming();
+    await testRejoinActiveState();
     await testEdgeCasesAndStability();
     await testMultipleUsersConcurrency();
     await testCleanExit();

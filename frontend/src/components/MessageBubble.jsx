@@ -1,10 +1,11 @@
 // =============================================================================
 // MessageBubble.jsx — Renders a single chat message with:
 // - Reply preview (if message is a reply to another)
-// - Long-press context menu (Copy / Reply / Delete)
+// - Long-press / double-click context menu (Copy / Reply / Delete)
 // - Swipe-right to reply gesture (touch devices)
-// - Auto-delete countdown based on TTL
+// - Auto-delete countdown based on TTL (timer visible to sender only)
 // - IntersectionObserver-based read receipts
+// - Delete permission: only sender or room creator can delete
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -21,7 +22,7 @@ const TTL_SECONDS = {
 };
 
 export default function MessageBubble({ message }) {
-  const { userId, markRead, setMessages, setReplyTo, deleteMessage } = useChat();
+  const { userId, creatorId, markRead, setMessages, setReplyTo, deleteMessage } = useChat();
   const [fadeOut, setFadeOut] = useState(false);
   const [timeLeft, setTimeLeft] = useState(null);
   const [showMenu, setShowMenu] = useState(false);
@@ -165,10 +166,14 @@ export default function MessageBubble({ message }) {
     setShowMenu(false);
   }, [setReplyTo, message]);
 
+  // Delete: pass senderId for server-side permission check
   const handleDelete = useCallback(() => {
-    deleteMessage(message.messageId);
+    deleteMessage(message.messageId, message.senderId);
     setShowMenu(false);
-  }, [deleteMessage, message.messageId]);
+  }, [deleteMessage, message.messageId, message.senderId]);
+
+  // Permission: only sender or room creator can delete
+  const canDelete = isOwn || userId === creatorId;
 
   // Double-click to open menu (desktop)
   const handleDoubleClick = useCallback((e) => {
@@ -283,12 +288,14 @@ export default function MessageBubble({ message }) {
             >
               <Reply className="w-4 h-4" /> Reply
             </button>
-            <button
-              onClick={handleDelete}
-              className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" /> Delete
-            </button>
+            {canDelete && (
+              <button
+                onClick={handleDelete}
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Delete
+              </button>
+            )}
           </div>
         </div>
       )}

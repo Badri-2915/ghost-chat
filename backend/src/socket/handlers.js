@@ -1,12 +1,18 @@
 // =============================================================================
 // socket/handlers.js — Message handling, delivery receipts, typing indicators,
-// panic delete, and user awareness events (visibility, screenshot detection).
+// panic delete, and visibility awareness for Ghost Chat.
+//
+// Delete permissions: only the message sender (or the room creator as moderator)
+// can delete a message. Message length is capped at 5000 characters.
 // =============================================================================
 
 const { v4: uuidv4 } = require('uuid');
-const { storeMessage, deleteMessage, refreshRoomTTL, bufferMissedMessage, getRoomUsers } = require('../redis');
+const { storeMessage, deleteMessage, getMessage, refreshRoomTTL, bufferMissedMessage, getRoomUsers, getRoom } = require('../redis');
 const { rateLimitMessage } = require('../rateLimiter');
 const { getSocketUser } = require('./rooms');
+
+// Maximum message length (characters) — prevents abuse and memory bloat
+const MAX_MESSAGE_LENGTH = 5000;
 
 // ---------------------------------------------------------------------------
 // Send a new message to the room. Supports optional replyTo for threading.
@@ -22,6 +28,12 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, 
   const allowed = await rateLimitMessage(userData.userId);
   if (!allowed) {
     socket.emit('error-message', { message: 'Rate limit exceeded. Slow down.' });
+    return;
+  }
+
+  // Enforce message length limit
+  if (typeof encryptedContent === 'string' && encryptedContent.length > MAX_MESSAGE_LENGTH) {
+    socket.emit('error-message', { message: `Message too long (max ${MAX_MESSAGE_LENGTH} characters)` });
     return;
   }
 
@@ -137,14 +149,33 @@ function handleTypingStop(socket, io, { roomCode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete a single message from Redis and all connected UIs
+// Delete a single message: only sender or room creator (moderator) can delete.
+// Removes from Redis and broadcasts deletion to all connected UIs.
 // ---------------------------------------------------------------------------
-async function handleDeleteMessage(socket, io, { roomCode, messageId }) {
+async function handleDeleteMessage(socket, io, { roomCode, messageId, senderId }) {
   const userData = getSocketUser(socket.id);
   if (!userData || userData.roomId !== roomCode) return;
 
-  await deleteMessage(roomCode, messageId);
+  // Check permission: sender can delete own, creator can delete any
+  const room = await getRoom(roomCode);
+  const isRoomCreator = room && room.creator === userData.userId;
 
+  // If senderId is provided by the client, use it; otherwise try to look up from Redis
+  let msgSender = senderId;
+  if (!msgSender) {
+    try {
+      const stored = await getMessage(roomCode, messageId);
+      if (stored) msgSender = stored.senderId;
+    } catch (e) { /* best effort */ }
+  }
+
+  // Permission check: must be sender or room creator
+  if (msgSender && msgSender !== userData.userId && !isRoomCreator) {
+    socket.emit('error-message', { message: 'Cannot delete: not your message' });
+    return;
+  }
+
+  await deleteMessage(roomCode, messageId);
   io.to(roomCode).emit('message-deleted', { messageId });
 }
 
@@ -177,21 +208,6 @@ function handleVisibilityChange(socket, io, { roomCode, isVisible }) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Screenshot awareness: best-effort detection (tab blur / minimize).
-// Notifies the room so they know the user may have captured screen content.
-// ---------------------------------------------------------------------------
-function handleScreenshotWarning(socket, io, { roomCode }) {
-  const userData = getSocketUser(socket.id);
-  if (!userData || userData.roomId !== roomCode) return;
-
-  socket.to(roomCode).emit('screenshot-warning', {
-    userId: userData.userId,
-    username: userData.username,
-    timestamp: Date.now(),
-  });
-}
-
 module.exports = {
   handleSendMessage,
   handleMessageDelivered,
@@ -201,5 +217,4 @@ module.exports = {
   handleDeleteMessage,
   handlePanicDelete,
   handleVisibilityChange,
-  handleScreenshotWarning,
 };
