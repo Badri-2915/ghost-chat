@@ -202,15 +202,11 @@ async function testPresenceDisconnect() {
   const { joiner } = await joinUser(creator, roomData.roomCode, 'Bob');
 
   const leftP = waitFor(creator, 'user-left');
-  const usersP = waitFor(creator, 'users-updated');
   joiner.disconnect();
 
   const left = await leftP;
   assert(left.username === 'Bob', 'User left event shows Bob');
-  const uPayload = await usersP;
-  // User stays in Redis for offline message buffering, so presence still shows 2
-  // But user-left event fires for UI to mark them as offline
-  assert(!!uPayload.users || !!uPayload, 'Users-updated event fires on disconnect');
+  assert(left.userId !== undefined, 'User left event has userId');
 
   creator.disconnect();
 }

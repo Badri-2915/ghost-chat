@@ -63,7 +63,7 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Real-Time Messaging** | Instant delivery via WebSockets (Socket.IO) |
 | **End-to-End Encryption** | AES-GCM encryption with room-derived key (PBKDF2) |
 | **Ephemeral Messages** | Auto-delete: after seen (3s), 5s, 15s, 30s, 1m, or 5m |
-| **Reply Feature** | Swipe-to-reply (touch), long-press menu (Copy/Reply/Delete) |
+| **Reply Feature** | Swipe-to-reply (touch), double-click/long-press menu (Copy/Reply/Delete) |
 | **Panic Button** | Instantly wipe all messages for all users in the room |
 | **Toast Notifications** | Join requests with inline Accept/Reject buttons |
 | **Typing Indicators** | See who's typing in real time |
@@ -75,6 +75,9 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | **Screenshot Awareness** | Best-effort <3s heuristic warns room members |
 | **Rate Limiting** | Per-user message limits + per-IP connection limits |
 | **Message Dedup** | Duplicate messages prevented on rejoin via messageId check |
+| **No Duplicate Users** | Stale sessions cleaned on rejoin, single entry per username |
+| **Room Code Trimming** | Whitespace-tolerant room code matching for manual entry |
+| **Timer Privacy** | Ephemeral countdown visible only to sender, not receivers |
 | **Connection Handling** | Disconnect overlay, auto-reconnect, online/offline detection |
 | **Leave Room** | Clean exit with full state reset and server-side cleanup |
 | **Scroll-to-Bottom** | Smart auto-scroll + manual scroll button when reading history |
@@ -115,7 +118,8 @@ ghost-chat/
 │   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect
 │   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
 │   ├── static/                          # Built frontend (production)
-│   └── test.js                          # 48 comprehensive feature tests
+│   ├── test.js                          # Quick feature tests (48 assertions)
+│   └── test-comprehensive.js            # Full test suite (151 assertions)
 ├── frontend/
 │   ├── public/
 │   │   ├── sitemap.xml                  # SEO sitemap for Google
@@ -197,33 +201,32 @@ cd frontend && npm run dev   # Frontend dev server
 ```bash
 # Start server first, then:
 cd backend
-node test.js
-
-# 48 tests, 0 failures
+node test.js                  # Quick suite: 48 assertions
+node test-comprehensive.js    # Full suite: 151 assertions
 ```
 
-### Test Coverage (18 test groups, 48 assertions)
+### Test Coverage (19 test suites, 151 assertions)
 
-| Category | Tests |
-|----------|-------|
-| Health endpoint | 4 |
-| Room creation | 5 |
-| Join/approve/reject flow | 3 |
-| Real-time messaging + receipts | 7 |
-| Typing indicators | 2 |
-| Presence (disconnect/offline) | 2 |
-| Invalid room | 1 |
-| Message deletion | 1 |
-| Panic delete | 2 |
-| 3-state presence (active/inactive) | 4 |
-| Visibility change | 2 |
-| Screenshot warning | 2 |
-| Creator rejoin (auto-approve) | 4 |
-| Offline message recovery | 3 |
-| Creator rejoin + missed messages | 1 |
-| After-seen TTL = 3s | 2 |
-| Join-approved creatorId | 2 |
-| SPA fallback (deep links) | 1 |
+| Suite | Assertions | Covers |
+|-------|------------|--------|
+| Health & Server | 9 | API, SPA fallback, uptime, response time |
+| Room Creation | 14 | Unique codes, user IDs, special chars, empty/long usernames |
+| Join Request Flow | 13 | Approve, reject, invalid code, non-creator auth, auto-approve |
+| Messaging | 17 | Send, receive, all TTL values, receipts, outsider block, edge cases |
+| Reply Feature | 10 | Reply refs, chains, self-reply, null replyTo |
+| Message Deletion | 5 | Single delete, multi-delete, non-existent, outsider |
+| Panic Delete | 6 | Creator/joiner trigger, empty room, rapid, outsider |
+| Typing Indicators | 8 | Start/stop, rapid, outsider, simultaneous |
+| Rate Limiting | 4 | Connection/message limits, burst under limit |
+| Presence & Disconnect | 6 | User left, creator left, multi-leave, pending disconnect |
+| 3-State Presence | 7 | Active/inactive broadcast, rapid toggles, creator state |
+| Visibility & Screenshot | 10 | Hide/show, screenshot warning, rapid, outsider, creator |
+| Creator Rejoin & No Duplicates | 5 | Auto-approve, no duplicate users, whitespace-padded code |
+| Offline Message Recovery | 6 | Missed messages, creator rejoin + missed, content order |
+| Room Code Trimming | 4 | Whitespace join, whitespace rejoin, empty-after-trim |
+| Edge Cases & Stability | 9 | Unicode, 10K chars, burst 20 msgs, post-disconnect, concurrent ops |
+| Multiple Users & Concurrency | 8 | 3-user broadcast, cross-room isolation, concurrent creation |
+| Clean Exit | 3 | Leave notification, Redis cleanup, graceful disconnect |
 
 ---
 

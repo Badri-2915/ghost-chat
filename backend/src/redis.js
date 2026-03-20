@@ -143,6 +143,27 @@ async function removeUserFromRoom(roomId, userId) {
   }
 }
 
+// Remove ALL user entries for a given username (prevents duplicates on rejoin)
+async function removeUserByUsername(roomId, username) {
+  const key = `${P}room:${roomId}:users`;
+  if (useMemory) {
+    const users = memGet(key) || {};
+    for (const [uid, data] of Object.entries(users)) {
+      const uname = typeof data === 'string' ? data : data.username;
+      if (uname === username) delete users[uid];
+    }
+    memSet(key, users, 6 * 60 * 60);
+  } else {
+    const users = await redis.hgetall(key);
+    for (const [uid, raw] of Object.entries(users)) {
+      try {
+        const data = JSON.parse(raw);
+        if (data.username === username) await redis.hdel(key, uid);
+      } catch (e) { /* skip malformed */ }
+    }
+  }
+}
+
 async function getRoomUsers(roomId) {
   const key = `${P}room:${roomId}:users`;
   if (useMemory) {
@@ -279,6 +300,7 @@ module.exports = {
   refreshRoomTTL,
   addUserToRoom,
   removeUserFromRoom,
+  removeUserByUsername,
   getRoomUsers,
   addJoinRequest,
   removeJoinRequest,

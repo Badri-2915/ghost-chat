@@ -201,6 +201,9 @@ export function ChatProvider({ children }) {
       // 3-state presence: active / inactive / offline
       'user-state-changed': ({ userId: uid, username: uname, state }) => {
         setUserStates((prev) => ({ ...prev, [uid]: state }));
+        if (state === 'inactive' && uid !== userId) {
+          addToast(`${uname} is inactive (tab switched)`, 'info', 3000);
+        }
       },
 
       // Screenshot awareness (best-effort, minimal)

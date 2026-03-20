@@ -14,6 +14,7 @@ const {
   updateRoomCreator,
   addUserToRoom,
   removeUserFromRoom,
+  removeUserByUsername,
   getRoomUsers,
   addJoinRequest,
   removeJoinRequest,
@@ -64,7 +65,8 @@ async function handleCreateRoom(socket, io, { username }) {
 // Join request: user asks to join, creator must approve. User is "pending".
 // ---------------------------------------------------------------------------
 async function handleJoinRequest(socket, io, { roomCode, username }) {
-  const room = await getRoom(roomCode);
+  const trimmedCode = (roomCode || '').trim();
+  const room = await getRoom(trimmedCode);
 
   if (!room) {
     socket.emit('error-message', { message: 'Room not found' });
@@ -78,37 +80,48 @@ async function handleJoinRequest(socket, io, { roomCode, username }) {
     // Auto-approve creator — no waiting
     const userId = generateUserId();
     const oldCreatorId = room.creator;
-    socket.join(roomCode);
-    socketUsers.set(socket.id, { roomId: roomCode, userId, username });
-    await addUserToRoom(roomCode, userId, username);
-    await updateRoomCreator(roomCode, userId);
-    await refreshRoomTTL(roomCode);
 
-    socket.emit('join-approved', { roomCode, userId, username, isCreator: true, creatorId: userId });
+    // Remove any stale entries for this username before adding fresh
+    await removeUserByUsername(trimmedCode, username);
+    // Also clean up any stale socketUsers entries for this username+room
+    cleanStaleSocketEntries(trimmedCode, username);
 
-    const users = await getRoomUsers(roomCode);
-    io.to(roomCode).emit('users-updated', { users, creator: userId });
-    io.to(roomCode).emit('user-rejoined', { userId, username });
+    socket.join(trimmedCode);
+    socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
+    await addUserToRoom(trimmedCode, userId, username);
+    await updateRoomCreator(trimmedCode, userId);
+    await refreshRoomTTL(trimmedCode);
+
+    socket.emit('join-approved', { roomCode: trimmedCode, userId, username, isCreator: true, creatorId: userId });
+
+    const users = await getRoomUsers(trimmedCode);
+    io.to(trimmedCode).emit('users-updated', { users, creator: userId });
+    io.to(trimmedCode).emit('user-rejoined', { userId, username });
 
     // Deliver missed messages (buffered under old creator userId)
     try {
-      const missed = await getMissedMessages(roomCode, oldCreatorId);
+      const missed = await getMissedMessages(trimmedCode, oldCreatorId);
       for (const msg of missed) socket.emit('new-message', msg);
     } catch (e) { /* best effort */ }
     return;
   }
 
   const userId = generateUserId();
-  socketUsers.set(socket.id, { roomId: roomCode, userId, username, pending: true });
 
-  await addJoinRequest(roomCode, userId, username);
+  // Remove any stale entries for this username before adding pending
+  await removeUserByUsername(trimmedCode, username);
+  cleanStaleSocketEntries(trimmedCode, username);
 
-  socket.emit('join-requested', { roomCode, userId, username });
+  socketUsers.set(socket.id, { roomId: trimmedCode, userId, username, pending: true });
+
+  await addJoinRequest(trimmedCode, userId, username);
+
+  socket.emit('join-requested', { roomCode: trimmedCode, userId, username });
 
   // Notify creator
-  const creatorSocketId = findSocketByUserId(io, room.creator, roomCode);
+  const creatorSocketId = findSocketByUserId(io, room.creator, trimmedCode);
   if (creatorSocketId) {
-    const requests = await getJoinRequests(roomCode);
+    const requests = await getJoinRequests(trimmedCode);
     io.to(creatorSocketId).emit('join-requests-updated', requests);
   }
 }
@@ -190,27 +203,34 @@ async function handleRejectJoin(socket, io, { roomCode, userId }) {
 // Rejoin room: user reconnects after a disconnect (same userId, new socket)
 // ---------------------------------------------------------------------------
 async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
-  const room = await getRoom(roomCode);
+  const trimmedCode = (roomCode || '').trim();
+  const room = await getRoom(trimmedCode);
   if (!room) {
     socket.emit('error-message', { message: 'Room no longer exists' });
     return;
   }
 
+  // Clean stale entries for this username (prevents duplicates)
+  await removeUserByUsername(trimmedCode, username);
+  cleanStaleSocketEntries(trimmedCode, username);
+
+  // Cancel any pending disconnect removal for this user
+  cancelPendingRemoval(userId);
+
   // Register the new socket with the existing userId
-  socket.join(roomCode);
-  socketUsers.set(socket.id, { roomId: roomCode, userId, username });
+  socket.join(trimmedCode);
+  socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
 
-  // Re-add user to presence (may already exist if disconnect cleanup was slow)
-  await addUserToRoom(roomCode, userId, username);
-  await refreshRoomTTL(roomCode);
+  await addUserToRoom(trimmedCode, userId, username);
+  await refreshRoomTTL(trimmedCode);
 
-  const users = await getRoomUsers(roomCode);
-  io.to(roomCode).emit('users-updated', { users, creator: room.creator });
-  io.to(roomCode).emit('user-rejoined', { userId, username });
+  const users = await getRoomUsers(trimmedCode);
+  io.to(trimmedCode).emit('users-updated', { users, creator: room.creator });
+  io.to(trimmedCode).emit('user-rejoined', { userId, username });
 
   // Deliver missed messages for this user
   try {
-    const missed = await getMissedMessages(roomCode, userId);
+    const missed = await getMissedMessages(trimmedCode, userId);
     for (const msg of missed) socket.emit('new-message', msg);
   } catch (e) { /* best effort */ }
 }
@@ -218,6 +238,17 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username }) {
 // ---------------------------------------------------------------------------
 // Disconnect cleanup: remove user from room, notify remaining members
 // ---------------------------------------------------------------------------
+// Pending removal timers — allows grace period for offline buffering
+const pendingRemovals = new Map();
+
+function cancelPendingRemoval(userId) {
+  const timer = pendingRemovals.get(userId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingRemovals.delete(userId);
+  }
+}
+
 async function handleDisconnect(socket, io) {
   const userData = socketUsers.get(socket.id);
   if (!userData) return;
@@ -227,14 +258,26 @@ async function handleDisconnect(socket, io) {
 
   if (userData.pending) return;
 
-  // Do NOT remove from Redis room users — keep for offline message buffering.
-  // The user stays in getRoomUsers() so messages sent while they're offline
-  // get buffered. On rejoin, addUserToRoom() refreshes their entry.
-  // Room TTL (6h) auto-cleans stale users.
-  const users = await getRoomUsers(roomId);
-  const roomData = await getRoom(roomId);
-  io.to(roomId).emit('users-updated', { users, creator: roomData?.creator });
+  // Check if this user still has another active socket (e.g. reconnect already happened)
+  const otherSocket = findSocketByUserId(io, userId, roomId);
+  if (otherSocket) return; // Still connected via another socket — skip cleanup
+
+  // Emit user-left immediately for UI
   io.to(roomId).emit('user-left', { userId, username });
+
+  // Delay Redis removal by 10s to allow offline message buffering.
+  // If the user rejoins within 10s, the timer is cancelled.
+  const timer = setTimeout(async () => {
+    pendingRemovals.delete(userId);
+    await removeUserFromRoom(roomId, userId);
+    const users = await getRoomUsers(roomId);
+    const roomData = await getRoom(roomId);
+    if (roomData) {
+      io.to(roomId).emit('users-updated', { users, creator: roomData.creator });
+    }
+  }, 10000);
+
+  pendingRemovals.set(userId, timer);
 }
 
 // Utility: find a socket ID by userId and roomCode (linear scan of socketUsers)
@@ -245,6 +288,15 @@ function findSocketByUserId(io, userId, roomCode) {
     }
   }
   return null;
+}
+
+// Utility: remove stale socketUsers entries for a given username + room
+function cleanStaleSocketEntries(roomCode, username) {
+  for (const [socketId, data] of socketUsers.entries()) {
+    if (data.roomId === roomCode && data.username === username) {
+      socketUsers.delete(socketId);
+    }
+  }
 }
 
 // Utility: get user data for a given socket ID
