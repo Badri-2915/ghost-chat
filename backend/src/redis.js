@@ -247,7 +247,7 @@ async function deleteMessage(roomId, messageId) {
 
 // ---- Missed message buffer (for offline users) ----
 // Cap at MAX_MISSED_PER_USER to prevent unbounded growth
-const MAX_MISSED_PER_USER = 3;
+const MAX_MISSED_PER_USER = 50;
 
 async function bufferMissedMessage(roomId, userId, messageData) {
   const key = `${P}missed:${roomId}:${userId}`;

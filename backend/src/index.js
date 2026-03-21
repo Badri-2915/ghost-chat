@@ -21,6 +21,7 @@ const {
   handleApproveJoin,
   handleRejectJoin,
   handleRejoinRoom,
+  handleLeaveRoom,
   handleDisconnect,
   handleUserInactive,
   handleUserActive,
@@ -110,6 +111,7 @@ io.on('connection', async (socket) => {
   socket.on('approve-join', (data) => handleApproveJoin(socket, io, data));
   socket.on('reject-join', (data) => handleRejectJoin(socket, io, data));
   socket.on('rejoin-room', (data) => handleRejoinRoom(socket, io, data));
+  socket.on('leave-room', () => handleLeaveRoom(socket, io));
 
   // Message events
   socket.on('send-message', (data) => handleSendMessage(socket, io, data));

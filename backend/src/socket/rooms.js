@@ -116,7 +116,17 @@ async function handleJoinRequest(socket, io, { roomCode, username, creatorToken 
     // Deliver missed messages (buffered under old creator userId)
     try {
       const missed = await getMissedMessages(trimmedCode, oldCreatorId);
-      for (const msg of missed) socket.emit('new-message', msg);
+      for (const msg of missed) {
+        socket.emit('new-message', msg);
+        // Notify the sender that their buffered message was delivered (double tick)
+        if (msg.senderId !== userId) {
+          socket.to(trimmedCode).emit('message-status-update', {
+            messageId: msg.messageId,
+            status: 'delivered',
+            userId,
+          });
+        }
+      }
     } catch (e) { /* best effort */ }
     return;
   }
@@ -183,6 +193,8 @@ async function handleApproveJoin(socket, io, { roomCode, userId }) {
 
   const users = await getRoomUsers(roomCode);
   const roomData = await getRoom(roomCode);
+  // Emit user-joined (first time) BEFORE users-updated so frontend can show correct toast
+  io.to(roomCode).emit('user-joined', { userId, username: requestData.username });
   io.to(roomCode).emit('users-updated', { users, creator: roomData?.creator });
 
   // Send updated pending list to creator
@@ -266,13 +278,59 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
   // Deliver missed messages for this user (check both current and old creator userId)
   try {
     const missed = await getMissedMessages(trimmedCode, userId);
-    for (const msg of missed) socket.emit('new-message', msg);
     // If creator rejoin, also deliver messages buffered under old creator userId
     if (isCreatorRejoin && room.creator !== userId) {
       const oldMissed = await getMissedMessages(trimmedCode, room.creator);
-      for (const msg of oldMissed) socket.emit('new-message', msg);
+      missed.push(...oldMissed);
+    }
+    for (const msg of missed) {
+      socket.emit('new-message', msg);
+      // Notify the sender that their buffered message was delivered (double tick)
+      if (msg.senderId !== userId) {
+        socket.to(trimmedCode).emit('message-status-update', {
+          messageId: msg.messageId,
+          status: 'delivered',
+          userId,
+        });
+      }
     }
   } catch (e) { /* best effort */ }
+}
+
+// ---------------------------------------------------------------------------
+// Explicit leave: user clicked "Leave Room" button
+// ---------------------------------------------------------------------------
+async function handleLeaveRoom(socket, io) {
+  const userData = socketUsers.get(socket.id);
+  if (!userData || userData.pending) return;
+
+  const { roomId, userId, username } = userData;
+
+  // Mark as explicitly left so handleDisconnect skips this socket
+  userData.left = true;
+  socketUsers.delete(socket.id);
+  socket.leave(roomId);
+
+  // Cancel any pending removal timer
+  cancelPendingRemoval(userId);
+
+  // Remove from Redis immediately
+  await removeUserFromRoom(roomId, userId);
+
+  // Emit explicit leave event ("left the room", not "disconnected")
+  io.to(roomId).emit('user-left-room', { userId, username });
+
+  // Check if room is now empty
+  const users = await getRoomUsers(roomId);
+  if (Object.keys(users).length === 0) {
+    await destroyRoom(roomId);
+    console.log(`[Room] ${roomId} destroyed - no users remaining`);
+  } else {
+    const roomData = await getRoom(roomId);
+    if (roomData) {
+      io.to(roomId).emit('users-updated', { users, creator: roomData.creator });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +354,8 @@ async function handleDisconnect(socket, io) {
   const { roomId, userId, username } = userData;
   socketUsers.delete(socket.id);
 
+  // Skip if user explicitly left (handleLeaveRoom already handled it)
+  if (userData.left) return;
   if (userData.pending) return;
 
   // Check if this user still has another active socket (e.g. reconnect already happened)
@@ -306,8 +366,10 @@ async function handleDisconnect(socket, io) {
   io.to(roomId).emit('user-left', { userId, username });
   io.to(roomId).emit('user-state-changed', { userId, username, state: 'offline' });
 
-  // Delay Redis removal by 10s to allow offline message buffering.
-  // If the user rejoins within 10s, the timer is cancelled.
+  // Delay Redis removal by 5 minutes to allow offline message buffering.
+  // During this window, messages sent to the room are buffered for this user.
+  // If the user rejoins within 5 min, the timer is cancelled and buffered msgs delivered.
+  const OFFLINE_GRACE_MS = 5 * 60 * 1000; // 5 minutes
   const timer = setTimeout(async () => {
     pendingRemovals.delete(userId);
     await removeUserFromRoom(roomId, userId);
@@ -325,7 +387,7 @@ async function handleDisconnect(socket, io) {
         io.to(roomId).emit('users-updated', { users, creator: roomData.creator });
       }
     }
-  }, 10000);
+  }, OFFLINE_GRACE_MS);
 
   pendingRemovals.set(userId, timer);
 }
@@ -385,6 +447,7 @@ module.exports = {
   handleApproveJoin,
   handleRejectJoin,
   handleRejoinRoom,
+  handleLeaveRoom,
   handleDisconnect,
   handleUserInactive,
   handleUserActive,

@@ -272,19 +272,32 @@ export function ChatProvider({ children }) {
         });
       },
 
+      // Explicit leave — user clicked "Leave Room" button
+      'user-left-room': ({ userId: leftId, username: leftName }) => {
+        setTypingUsers((prev) => { const n = { ...prev }; delete n[leftId]; return n; });
+        setUserStates((prev) => { const n = { ...prev }; delete n[leftId]; return n; });
+        offlineUserIds.current.delete(leftId);
+        // Remove from users list immediately — they left intentionally
+        setUsers((prev) => { const n = { ...prev }; delete n[leftId]; return n; });
+        addToast(`${leftName} left the room`, 'info', 3000);
+      },
+
+      // Network disconnect — user lost connection (may reconnect)
       'user-left': ({ userId: leftId, username: leftName }) => {
-        setTypingUsers((prev) => {
-          const next = { ...prev };
-          delete next[leftId];
-          return next;
-        });
-        // Mark user as offline immediately in presence state
+        setTypingUsers((prev) => { const n = { ...prev }; delete n[leftId]; return n; });
+        // Mark user as offline — keep in list so they show as "offline"
         setUserStates((prev) => ({ ...prev, [leftId]: 'offline' }));
-        // Track offline user so a stale users-updated doesn't re-add them as active
         offlineUserIds.current.add(leftId);
-        // Keep user in the users list — they show as "offline" in UserList.
-        // Server's 10s timer will emit users-updated which removes them from Redis.
         addToast(`${leftName} disconnected`, 'info', 3000);
+      },
+
+      'user-joined': ({ userId: joinId, username: joinName }) => {
+        // First-time join (after approval) — NOT a rejoin
+        offlineUserIds.current.delete(joinId);
+        setUserStates((prev) => ({ ...prev, [joinId]: 'active' }));
+        if (joinId !== userIdRef.current) {
+          addToast(`${joinName} joined the room`, 'info', 3000);
+        }
       },
 
       'user-rejoined': ({ userId: rejoinId, username: rejoinName }) => {
@@ -473,12 +486,13 @@ export function ChatProvider({ children }) {
     setToasts([]);
     setError('');
     roomKeyRef.current = null;
-    // Socket disconnect triggers server-side cleanup; reconnect for fresh state
+    // Emit explicit leave so server differentiates from network disconnect
     if (socket) {
+      emit('leave-room');
       socket.disconnect();
       socket.connect();
     }
-  }, [socket]);
+  }, [socket, emit]);
 
   const markRead = useCallback(
     (messageId) => {
