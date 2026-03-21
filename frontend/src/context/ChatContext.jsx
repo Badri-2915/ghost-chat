@@ -18,6 +18,7 @@ const ChatContext = createContext(null);
 
 // ---- Session persistence helpers ----
 const SESSION_KEY = 'gc_session';
+const TOKEN_PREFIX = 'gc_ct_'; // localStorage key prefix for creatorToken per room
 
 function saveSession(data) {
   try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) { /* private mode */ }
@@ -32,6 +33,22 @@ function loadSession() {
 
 function clearSession() {
   try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ok */ }
+}
+
+// Store creatorToken per room in localStorage — survives page close, leave, and rejoin
+function saveCreatorToken(roomCode, token) {
+  if (!roomCode || !token) return;
+  try { localStorage.setItem(TOKEN_PREFIX + roomCode, token); } catch (e) { /* ok */ }
+}
+
+function loadCreatorToken(roomCode) {
+  if (!roomCode) return '';
+  try { return localStorage.getItem(TOKEN_PREFIX + roomCode) || ''; } catch (e) { return ''; }
+}
+
+function clearCreatorToken(roomCode) {
+  if (!roomCode) return;
+  try { localStorage.removeItem(TOKEN_PREFIX + roomCode); } catch (e) { /* ok */ }
 }
 
 export function ChatProvider({ children }) {
@@ -64,6 +81,12 @@ export function ChatProvider({ children }) {
   const offlineUserIds = useRef(new Set());                    // Track offline users to prevent re-adding
 
   const roomKeyRef = useRef(null);
+  const userIdRef = useRef(userId);
+  const roomCodeRef = useRef(roomCode);
+
+  // Keep refs in sync with state
+  useEffect(() => { userIdRef.current = userId; }, [userId]);
+  useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
 
   // Helper: add a toast notification (auto-dismisses after duration ms)
   const addToast = useCallback((message, type = 'info', duration = 4000) => {
@@ -101,8 +124,10 @@ export function ChatProvider({ children }) {
     if (screen === 'chat' && roomCode && userId && username) {
       hasAutoRejoined.current = true;
       offlineUserIds.current.clear();
-      emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
-      console.log('[AutoRejoin] Restoring session:', roomCode, creatorToken ? '(creator)' : '(user)');
+      // Check both React state and localStorage for the creatorToken
+      const token = creatorToken || loadCreatorToken(roomCode);
+      emit('rejoin-room', { roomCode, userId, username, creatorToken: token || undefined });
+      console.log('[AutoRejoin] Restoring session:', roomCode, token ? '(creator)' : '(user)');
     }
   }, [socket, connected, screen, roomCode, userId, username, creatorToken, emit]);
 
@@ -116,7 +141,10 @@ export function ChatProvider({ children }) {
         setUserId(data.userId);
         setUsername(data.username);
         setIsCreator(true);
-        if (data.creatorToken) setCreatorToken(data.creatorToken);
+        if (data.creatorToken) {
+          setCreatorToken(data.creatorToken);
+          saveCreatorToken(data.roomCode, data.creatorToken);
+        }
         setScreen('chat');
       },
 
@@ -133,7 +161,10 @@ export function ChatProvider({ children }) {
         if (data?.roomCode) setRoomCode(data.roomCode);
         if (data?.isCreator) setIsCreator(true);
         if (data?.creatorId) setCreatorId(data.creatorId);
-        if (data?.creatorToken) setCreatorToken(data.creatorToken);
+        if (data?.creatorToken) {
+          setCreatorToken(data.creatorToken);
+          saveCreatorToken(data.roomCode, data.creatorToken);
+        }
         setScreen('chat');
       },
 
@@ -195,9 +226,9 @@ export function ChatProvider({ children }) {
           return [...prev, msg];
         });
 
-        // Send delivered receipt (if not own message)
-        if (data.senderId !== userId) {
-          emit('message-delivered', { roomCode, messageId: data.messageId });
+        // Send delivered receipt (if not own message) — use refs for current values
+        if (data.senderId !== userIdRef.current) {
+          emit('message-delivered', { roomCode: roomCodeRef.current, messageId: data.messageId });
         }
       },
 
@@ -252,7 +283,7 @@ export function ChatProvider({ children }) {
         // User is back online — remove from offline tracking
         offlineUserIds.current.delete(rejoinId);
         setUserStates((prev) => ({ ...prev, [rejoinId]: 'active' }));
-        if (rejoinId !== userId) {
+        if (rejoinId !== userIdRef.current) {
           addToast(`${rejoinName} rejoined the room`, 'info', 3000);
         }
       },
@@ -265,7 +296,7 @@ export function ChatProvider({ children }) {
       // 3-state presence: active / inactive / offline
       'user-state-changed': ({ userId: uid, username: uname, state }) => {
         setUserStates((prev) => ({ ...prev, [uid]: state }));
-        if (state === 'inactive' && uid !== userId) {
+        if (state === 'inactive' && uid !== userIdRef.current) {
           addToast(`${uname} is inactive (tab switched)`, 'info', 3000);
         }
       },
@@ -306,10 +337,10 @@ export function ChatProvider({ children }) {
       if (screen === 'chat' && roomCode && userId && username) {
         // Clear offline tracking — server will send fresh users-updated after rejoin
         offlineUserIds.current.clear();
-        // Always use rejoin-room — preserves userId so pending removal timer can be cancelled.
-        // If creator, include creatorToken so backend can restore creator privileges.
-        emit('rejoin-room', { roomCode, userId, username, creatorToken: creatorToken || undefined });
-        console.log('[Reconnect] Rejoining room:', roomCode, creatorToken ? '(creator)' : '(user)');
+        // Check both React state and localStorage for the creatorToken
+        const token = creatorToken || loadCreatorToken(roomCode);
+        emit('rejoin-room', { roomCode, userId, username, creatorToken: token || undefined });
+        console.log('[Reconnect] Rejoining room:', roomCode, token ? '(creator)' : '(user)');
       }
     };
 
@@ -336,6 +367,24 @@ export function ChatProvider({ children }) {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [roomCode, screen, emit]);
 
+  // ---- Instant offline on tab/browser close ----
+  // Fires synchronously before page unloads — tells server immediately
+  useEffect(() => {
+    if (!socket || screen !== 'chat' || !roomCode) return;
+
+    const handleBeforeUnload = () => {
+      // sendBeacon is reliable during unload; emit may not flush
+      const url = (import.meta.env.VITE_API_URL || '') + '/api/leave';
+      const payload = JSON.stringify({ roomCode, userId });
+      try {
+        navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+      } catch (e) { /* fallback: socket will disconnect naturally */ }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [socket, screen, roomCode, userId]);
+
   // ---- Actions ----
   const createRoom = useCallback(
     (name) => {
@@ -349,8 +398,9 @@ export function ChatProvider({ children }) {
     (name, code) => {
       setUsername(name);
       setRoomCode(code);
-      // Send creatorToken if we have one (for creator rejoin verification)
-      emit('join-request', { roomCode: code, username: name, creatorToken: creatorToken || undefined });
+      // Look up stored creatorToken for this room (survives leave + page close)
+      const storedToken = creatorToken || loadCreatorToken(code);
+      emit('join-request', { roomCode: code, username: name, creatorToken: storedToken || undefined });
     },
     [emit, creatorToken]
   );

@@ -61,14 +61,32 @@ app.get('/api/health', (req, res) => {
 const staticPath = path.join(__dirname, '..', 'static');
 app.use(express.static(staticPath));
 
+// Instant leave endpoint — called via sendBeacon on tab/browser close
+// This triggers immediate disconnect handling without waiting for pingTimeout
+app.post('/api/leave', (req, res) => {
+  const { roomCode, userId } = req.body || {};
+  if (!roomCode || !userId) return res.status(400).end();
+  
+  // Find and disconnect the socket for this user
+  const { socketUsers } = require('./socket/rooms');
+  for (const [socketId, data] of socketUsers.entries()) {
+    if (data.userId === userId && data.roomId === roomCode) {
+      const s = io.sockets.sockets.get(socketId);
+      if (s) s.disconnect(true);
+      break;
+    }
+  }
+  res.status(200).end();
+});
+
 // Socket.IO setup
 const io = new Server(server, {
   cors: {
     origin: corsOrigins,
     methods: ['GET', 'POST'],
   },
-  pingTimeout: 10000,
-  pingInterval: 5000,
+  pingTimeout: 30000,
+  pingInterval: 10000,
 });
 
 // Socket.IO connection handling
