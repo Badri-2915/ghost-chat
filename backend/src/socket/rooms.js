@@ -109,9 +109,9 @@ async function handleJoinRequest(socket, io, { roomCode, username, creatorToken 
     socket.emit('join-approved', { roomCode: trimmedCode, userId, username, isCreator: true, creatorId: userId, creatorToken });
 
     const users = await getRoomUsers(trimmedCode);
-    io.to(trimmedCode).emit('users-updated', { users, creator: userId });
+    // Emit user-rejoined FIRST so frontend clears offlineUserIds before processing users-updated
     io.to(trimmedCode).emit('user-rejoined', { userId, username });
-    io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
+    io.to(trimmedCode).emit('users-updated', { users, creator: userId });
 
     // Deliver missed messages (buffered under old creator userId)
     try {
@@ -259,11 +259,9 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
 
   const updatedRoom = await getRoom(trimmedCode);
   const users = await getRoomUsers(trimmedCode);
-  io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
+  // Emit user-rejoined FIRST so frontend clears offlineUserIds before processing users-updated
   io.to(trimmedCode).emit('user-rejoined', { userId, username });
-
-  // Broadcast active state so UI doesn't show as inactive after rejoin
-  io.to(trimmedCode).emit('user-state-changed', { userId, username, state: 'active' });
+  io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
 
   // Deliver missed messages for this user (check both current and old creator userId)
   try {

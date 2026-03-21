@@ -118,17 +118,29 @@ export function ChatProvider({ children }) {
     }
   }, [roomCode]);
 
-  // ---- Auto-rejoin on page load if we have a saved session ----
+  // ---- Auto-rejoin on connect/reconnect if we have a session ----
+  // This single effect handles BOTH initial page load AND socket reconnect.
+  // hasAutoRejoined resets on disconnect so it fires again on reconnect.
   useEffect(() => {
-    if (!socket || !connected || hasAutoRejoined.current) return;
-    if (screen === 'chat' && roomCode && userId && username) {
+    if (!socket) return;
+
+    // Reset the flag on disconnect so we rejoin on next connect
+    const handleDisconnect = () => {
+      hasAutoRejoined.current = false;
+    };
+    socket.on('disconnect', handleDisconnect);
+
+    if (connected && !hasAutoRejoined.current && screen === 'chat' && roomCode && userId && username) {
       hasAutoRejoined.current = true;
       offlineUserIds.current.clear();
-      // Check both React state and localStorage for the creatorToken
       const token = creatorToken || loadCreatorToken(roomCode);
       emit('rejoin-room', { roomCode, userId, username, creatorToken: token || undefined });
       console.log('[AutoRejoin] Restoring session:', roomCode, token ? '(creator)' : '(user)');
     }
+
+    return () => {
+      socket.off('disconnect', handleDisconnect);
+    };
   }, [socket, connected, screen, roomCode, userId, username, creatorToken, emit]);
 
   // ---- Socket event listeners ----
@@ -268,15 +280,11 @@ export function ChatProvider({ children }) {
         });
         // Mark user as offline immediately in presence state
         setUserStates((prev) => ({ ...prev, [leftId]: 'offline' }));
-        // Track offline user so users-updated doesn't re-add them
+        // Track offline user so a stale users-updated doesn't re-add them as active
         offlineUserIds.current.add(leftId);
-        // Remove user from the users list immediately so they don't show as online
-        setUsers((prev) => {
-          const next = { ...prev };
-          delete next[leftId];
-          return next;
-        });
-        addToast(`${leftName} left the room`, 'info', 3000);
+        // Keep user in the users list — they show as "offline" in UserList.
+        // Server's 10s timer will emit users-updated which removes them from Redis.
+        addToast(`${leftName} disconnected`, 'info', 3000);
       },
 
       'user-rejoined': ({ userId: rejoinId, username: rejoinName }) => {
@@ -328,27 +336,9 @@ export function ChatProvider({ children }) {
     };
   }, [socket, on, off, emit, roomCode, userId, addToast]);
 
-  // ---- Reconnect recovery ----
-  // When socket reconnects and user was in a chat, re-register with the room
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleReconnect = () => {
-      if (screen === 'chat' && roomCode && userId && username) {
-        // Clear offline tracking — server will send fresh users-updated after rejoin
-        offlineUserIds.current.clear();
-        // Check both React state and localStorage for the creatorToken
-        const token = creatorToken || loadCreatorToken(roomCode);
-        emit('rejoin-room', { roomCode, userId, username, creatorToken: token || undefined });
-        console.log('[Reconnect] Rejoining room:', roomCode, token ? '(creator)' : '(user)');
-      }
-    };
-
-    socket.io.on('reconnect', handleReconnect);
-    return () => {
-      socket.io.off('reconnect', handleReconnect);
-    };
-  }, [socket, screen, roomCode, userId, username, creatorToken, emit]);
+  // Reconnect recovery is now handled by the auto-rejoin effect above.
+  // hasAutoRejoined resets on disconnect, so when connected becomes true again,
+  // the auto-rejoin effect fires and emits rejoin-room exactly ONCE.
 
   // ---- Tab visibility & 3-state presence ----
   // Emits user_inactive / user_active for presence state tracking.
@@ -367,13 +357,15 @@ export function ChatProvider({ children }) {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [roomCode, screen, emit]);
 
-  // ---- Instant offline on tab/browser close ----
-  // Fires synchronously before page unloads — tells server immediately
+  // ---- Notify server on intentional page close (not refresh) ----
+  // Uses sendBeacon for reliable delivery during unload.
+  // Only fires when the page is actually being closed, not on SPA navigation.
   useEffect(() => {
     if (!socket || screen !== 'chat' || !roomCode) return;
 
     const handleBeforeUnload = () => {
-      // sendBeacon is reliable during unload; emit may not flush
+      // sendBeacon tells server to force-disconnect this socket immediately
+      // so other users see offline status without waiting for pingTimeout.
       const url = (import.meta.env.VITE_API_URL || '') + '/api/leave';
       const payload = JSON.stringify({ roomCode, userId });
       try {

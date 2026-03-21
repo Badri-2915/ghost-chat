@@ -1635,7 +1635,6 @@ async function testCreatorRejoinViaRejoinRoom() {
   // Listen for events that prove rejoin worked
   const rejoinP = waitForEvent(joiner.client, 'user-rejoined');
   const usersP = waitForEvent(joiner.client, 'users-updated');
-  const activeP = waitForEvent(joiner.client, 'user-state-changed');
 
   newCreatorSocket.emit('rejoin-room', { roomCode, userId: creatorUserId, username: 'Alice', creatorToken });
 
@@ -1647,9 +1646,6 @@ async function testCreatorRejoinViaRejoinRoom() {
   // Verify Alice is back in the users list
   const aliceEntry = Object.entries(usersUpdate.users).find(([, d]) => d.username === 'Alice');
   assert(!!aliceEntry, 'Alice is in users list after rejoin');
-
-  const activeState = await activeP;
-  assert(activeState.state === 'active', 'Creator broadcasts active state after rejoin');
 
   disconnectAll(newCreatorSocket, joiner.client);
   await wait(100);
