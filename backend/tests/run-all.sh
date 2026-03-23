@@ -3,7 +3,7 @@
 cd "$(dirname "$0")/.."
 FAIL=0
 
-for f in tests/test-core.js tests/test-presence.js tests/test-rejoin.js tests/test-offline-delivery.js; do
+for f in tests/test-core.js tests/test-presence.js tests/test-rejoin.js tests/test-participant-rejoin.js tests/test-offline-delivery.js; do
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Running: $f"

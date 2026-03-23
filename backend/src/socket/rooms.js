@@ -249,7 +249,14 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
   if (existingSocketId && existingSocketId !== socket.id) {
     const existingSock = io.sockets.sockets.get(existingSocketId);
     if (existingSock && existingSock.connected) {
-      // Already connected via another socket — just sync state, no duplicate rejoin event
+      // Already connected via another socket — update username if changed, sync state
+      const oldData = socketUsers.get(existingSocketId);
+      if (oldData && oldData.username !== username) {
+        await removeUserByUsername(trimmedCode, oldData.username);
+        cleanStaleSocketEntries(trimmedCode, oldData.username);
+        await removeUserFromRoom(trimmedCode, userId);
+        await addUserToRoom(trimmedCode, userId, username);
+      }
       socket.join(trimmedCode);
       socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
       const users = await getRoomUsers(trimmedCode);
@@ -282,9 +289,18 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
     }
   } catch (e) { /* best effort */ }
 
+  // Look up old username for this userId (may differ if user changed name)
+  const existingUsers = await getRoomUsers(trimmedCode);
+  const oldEntry = existingUsers[userId];
+  const oldUsername = oldEntry ? (typeof oldEntry === 'string' ? oldEntry : oldEntry.username) : null;
+
   // Clean stale entries for this userId AND username (prevents duplicate users in list)
   await removeUserFromRoom(trimmedCode, userId);  // remove old entry by userId
-  await removeUserByUsername(trimmedCode, username); // remove any stale entries with same username
+  await removeUserByUsername(trimmedCode, username); // remove any stale entries with new username
+  if (oldUsername && oldUsername !== username) {
+    await removeUserByUsername(trimmedCode, oldUsername); // remove old username entries too
+    cleanStaleSocketEntries(trimmedCode, oldUsername);
+  }
   cleanStaleSocketEntries(trimmedCode, username);
   // Also clean stale socket entries by userId (different username, same userId)
   cleanStaleSocketEntriesById(trimmedCode, userId);
