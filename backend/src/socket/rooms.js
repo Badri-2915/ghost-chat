@@ -96,9 +96,11 @@ async function handleJoinRequest(socket, io, { roomCode, username, creatorToken 
     // Cancel any pending disconnect removal for the old creator
     cancelPendingRemoval(oldCreatorId);
 
-    // Remove any stale entries for this username before adding fresh
+    // Remove stale entries: old creator userId + username duplicates
+    await removeUserFromRoom(trimmedCode, oldCreatorId);
     await removeUserByUsername(trimmedCode, username);
     cleanStaleSocketEntries(trimmedCode, username);
+    cleanStaleSocketEntriesById(trimmedCode, oldCreatorId);
 
     socket.join(trimmedCode);
     socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
@@ -242,12 +244,25 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
     return;
   }
 
+  // If this user already has an active socket in this room, skip (prevents duplicate rejoin)
+  const existingSocketId = findSocketByUserId(io, userId, trimmedCode);
+  if (existingSocketId && existingSocketId !== socket.id) {
+    const existingSock = io.sockets.sockets.get(existingSocketId);
+    if (existingSock && existingSock.connected) {
+      // Already connected via another socket — just sync state, no duplicate rejoin event
+      socket.join(trimmedCode);
+      socketUsers.set(socket.id, { roomId: trimmedCode, userId, username });
+      const users = await getRoomUsers(trimmedCode);
+      const updatedRoom = await getRoom(trimmedCode);
+      io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
+      return;
+    }
+    // Stale socket — clean it up
+    socketUsers.delete(existingSocketId);
+  }
+
   // Check if this is a creator rejoin via creatorToken
   const isCreatorRejoin = creatorToken && room.creatorToken && creatorToken === room.creatorToken;
-
-  // Clean stale entries for this username (prevents duplicates)
-  await removeUserByUsername(trimmedCode, username);
-  cleanStaleSocketEntries(trimmedCode, username);
 
   // Cancel any pending disconnect removal for this user
   cancelPendingRemoval(userId);
@@ -255,6 +270,24 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
   if (isCreatorRejoin && room.creator !== userId) {
     cancelPendingRemoval(room.creator);
   }
+
+  // Retrieve missed messages BEFORE cleaning stale entries (keys are by userId, not username)
+  let missed = [];
+  try {
+    missed = await getMissedMessages(trimmedCode, userId);
+    // If creator rejoin, also deliver messages buffered under old creator userId
+    if (isCreatorRejoin && room.creator !== userId) {
+      const oldMissed = await getMissedMessages(trimmedCode, room.creator);
+      missed.push(...oldMissed);
+    }
+  } catch (e) { /* best effort */ }
+
+  // Clean stale entries for this userId AND username (prevents duplicate users in list)
+  await removeUserFromRoom(trimmedCode, userId);  // remove old entry by userId
+  await removeUserByUsername(trimmedCode, username); // remove any stale entries with same username
+  cleanStaleSocketEntries(trimmedCode, username);
+  // Also clean stale socket entries by userId (different username, same userId)
+  cleanStaleSocketEntriesById(trimmedCode, userId);
 
   // Register the new socket with the existing userId
   socket.join(trimmedCode);
@@ -275,26 +308,18 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
   io.to(trimmedCode).emit('user-rejoined', { userId, username });
   io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
 
-  // Deliver missed messages for this user (check both current and old creator userId)
-  try {
-    const missed = await getMissedMessages(trimmedCode, userId);
-    // If creator rejoin, also deliver messages buffered under old creator userId
-    if (isCreatorRejoin && room.creator !== userId) {
-      const oldMissed = await getMissedMessages(trimmedCode, room.creator);
-      missed.push(...oldMissed);
+  // Deliver missed messages
+  for (const msg of missed) {
+    socket.emit('new-message', msg);
+    // Notify the sender that their buffered message was delivered (double tick)
+    if (msg.senderId !== userId) {
+      socket.to(trimmedCode).emit('message-status-update', {
+        messageId: msg.messageId,
+        status: 'delivered',
+        userId,
+      });
     }
-    for (const msg of missed) {
-      socket.emit('new-message', msg);
-      // Notify the sender that their buffered message was delivered (double tick)
-      if (msg.senderId !== userId) {
-        socket.to(trimmedCode).emit('message-status-update', {
-          messageId: msg.messageId,
-          status: 'delivered',
-          userId,
-        });
-      }
-    }
-  } catch (e) { /* best effort */ }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +431,15 @@ function findSocketByUserId(io, userId, roomCode) {
 function cleanStaleSocketEntries(roomCode, username) {
   for (const [socketId, data] of socketUsers.entries()) {
     if (data.roomId === roomCode && data.username === username) {
+      socketUsers.delete(socketId);
+    }
+  }
+}
+
+// Utility: remove stale socketUsers entries for a given userId + room
+function cleanStaleSocketEntriesById(roomCode, userId) {
+  for (const [socketId, data] of socketUsers.entries()) {
+    if (data.roomId === roomCode && data.userId === userId) {
       socketUsers.delete(socketId);
     }
   }

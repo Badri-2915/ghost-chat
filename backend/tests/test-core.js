@@ -12,7 +12,7 @@ async function run() {
   assert(r.username === 'Alice', 'Username matches');
   assert(r.isCreator === true, 'isCreator true');
   assert(r.creatorToken.length === 16, 'CreatorToken 16 chars');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- Join / Approve / Reject ---
   console.log('\n📌 Join Flow');
@@ -35,7 +35,7 @@ async function run() {
   bad.emit('join-request', { roomCode: 'ZZZZZZZZ', username: 'X' });
   const err = await errP;
   assert(err.message.includes('not found'), 'Invalid room error');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- First Join = "joined" not "rejoined" ---
   console.log('\n📌 First Join Notification');
@@ -50,7 +50,7 @@ async function run() {
   await waitFor(bob2, 'join-approved');
   const jd = await joinedP;
   assert(jd.username === 'Bob', 'user-joined event (not rejoined)');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- Messaging & Receipts ---
   console.log('\n📌 Messaging & Receipts');
@@ -72,7 +72,7 @@ async function run() {
   s3.joiner.client.emit('message-read', { roomCode: s3.creator.roomCode, messageId: msg.messageId });
   const rd = await rP;
   assert(rd.status === 'read', 'Read receipt');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- TTL values ---
   console.log('\n📌 TTL Values');
@@ -84,7 +84,7 @@ async function run() {
     const m = await p;
     assert(m.ttlSeconds === expected, `TTL ${ttl} → ${expected}s`);
   }
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- Typing ---
   console.log('\n📌 Typing');
@@ -96,7 +96,7 @@ async function run() {
   s5.joiner.client.emit('typing-stop', { roomCode: s5.creator.roomCode });
   await tsP;
   assert(true, 'Typing stop');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- Delete & Panic ---
   console.log('\n📌 Delete & Panic');
@@ -114,7 +114,7 @@ async function run() {
   s6.creator.client.emit('panic-delete', { roomCode: s6.creator.roomCode });
   assert((await pp1).triggeredBy === 'Alice', 'Panic creator');
   assert((await pp2).triggeredBy === 'Alice', 'Panic joiner');
-  cleanup(); await wait(1000);
+  cleanup(); await wait(1500);
 
   // --- Message length limit ---
   console.log('\n📌 Message Length');

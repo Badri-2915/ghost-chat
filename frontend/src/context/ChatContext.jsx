@@ -72,6 +72,7 @@ export function ChatProvider({ children }) {
   const [creatorId, setCreatorId] = useState(() => savedRef.current?.creatorId || '');
   const [creatorToken, setCreatorToken] = useState(() => savedRef.current?.creatorToken || ''); // Secret token for creator rejoin
   const hasAutoRejoined = useRef(false); // Prevent double auto-rejoin
+  const justJoinedRef = useRef(false);   // Prevent auto-rejoin right after join-approved
 
   // ---- New feature state ----
   const [replyTo, setReplyTo] = useState(null);          // message being replied to
@@ -131,6 +132,12 @@ export function ChatProvider({ children }) {
     socket.on('disconnect', handleDisconnect);
 
     if (connected && !hasAutoRejoined.current && screen === 'chat' && roomCode && userId && username) {
+      // Skip auto-rejoin if we just got join-approved (already in room)
+      if (justJoinedRef.current) {
+        justJoinedRef.current = false;
+        hasAutoRejoined.current = true;
+        return;
+      }
       hasAutoRejoined.current = true;
       offlineUserIds.current.clear();
       const token = creatorToken || loadCreatorToken(roomCode);
@@ -177,6 +184,9 @@ export function ChatProvider({ children }) {
           setCreatorToken(data.creatorToken);
           saveCreatorToken(data.roomCode, data.creatorToken);
         }
+        // Prevent auto-rejoin from firing immediately after approval
+        justJoinedRef.current = true;
+        hasAutoRejoined.current = true;
         setScreen('chat');
       },
 
@@ -188,12 +198,7 @@ export function ChatProvider({ children }) {
       'users-updated': (data) => {
         // data is { users: { userId: { username, joinedAt } }, creator: string }
         if (data && data.users) {
-          // Filter out users we know are offline (prevents re-adding after user-left)
-          const filtered = { ...data.users };
-          for (const uid of offlineUserIds.current) {
-            if (filtered[uid]) delete filtered[uid];
-          }
-          setUsers(filtered);
+          setUsers(data.users);
           if (data.creator) setCreatorId(data.creator);
         } else {
           setUsers(data);
