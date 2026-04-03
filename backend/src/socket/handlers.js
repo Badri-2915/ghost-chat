@@ -7,7 +7,7 @@
 // =============================================================================
 
 const { v4: uuidv4 } = require('uuid');
-const { storeMessage, deleteMessage, getMessage, refreshRoomTTL, bufferMissedMessage, getRoomUsers, getRoom } = require('../redis');
+const { storeMessage, deleteMessage, getMessage, refreshRoomTTL, getRoom } = require('../redis');
 const { rateLimitMessage } = require('../rateLimiter');
 const { getSocketUser } = require('./rooms');
 
@@ -76,26 +76,8 @@ async function handleSendMessage(socket, io, { roomCode, encryptedContent, ttl, 
     replyTo: replyTo || null,
   };
 
-  // Broadcast to all connected users in the room
+  // Broadcast to all connected users in the room (real-time only — no offline buffering)
   io.to(roomCode).emit('new-message', messageData);
-
-  // Buffer message for offline (disconnected) room members
-  try {
-    const roomUsers = await getRoomUsers(roomCode);
-    const connectedSockets = await io.in(roomCode).fetchSockets();
-    const connectedUserIds = new Set();
-    for (const s of connectedSockets) {
-      const u = getSocketUser(s.id);
-      if (u) connectedUserIds.add(u.userId);
-    }
-    for (const uid of Object.keys(roomUsers)) {
-      if (!connectedUserIds.has(uid)) {
-        await bufferMissedMessage(roomCode, uid, messageData);
-      }
-    }
-  } catch (e) {
-    // Non-critical — best effort buffering
-  }
 }
 
 // ---------------------------------------------------------------------------

@@ -5,3 +5,5 @@ dist/
 *.log
 .vite/
 docs/
+project_report.md
+interview_prep.md

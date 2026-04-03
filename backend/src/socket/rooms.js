@@ -27,7 +27,6 @@ const {
   removeJoinRequest,
   getJoinRequests,
   refreshRoomTTL,
-  getMissedMessages,
   destroyRoom,
 } = require('../redis');
 
@@ -115,21 +114,6 @@ async function handleJoinRequest(socket, io, { roomCode, username, creatorToken 
     io.to(trimmedCode).emit('user-rejoined', { userId, username });
     io.to(trimmedCode).emit('users-updated', { users, creator: userId });
 
-    // Deliver missed messages (buffered under old creator userId)
-    try {
-      const missed = await getMissedMessages(trimmedCode, oldCreatorId);
-      for (const msg of missed) {
-        socket.emit('new-message', msg);
-        // Notify the sender that their buffered message was delivered (double tick)
-        if (msg.senderId !== userId) {
-          socket.to(trimmedCode).emit('message-status-update', {
-            messageId: msg.messageId,
-            status: 'delivered',
-            userId,
-          });
-        }
-      }
-    } catch (e) { /* best effort */ }
     return;
   }
 
@@ -278,17 +262,6 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
     cancelPendingRemoval(room.creator);
   }
 
-  // Retrieve missed messages BEFORE cleaning stale entries (keys are by userId, not username)
-  let missed = [];
-  try {
-    missed = await getMissedMessages(trimmedCode, userId);
-    // If creator rejoin, also deliver messages buffered under old creator userId
-    if (isCreatorRejoin && room.creator !== userId) {
-      const oldMissed = await getMissedMessages(trimmedCode, room.creator);
-      missed.push(...oldMissed);
-    }
-  } catch (e) { /* best effort */ }
-
   // Look up old username for this userId (may differ if user changed name)
   const existingUsers = await getRoomUsers(trimmedCode);
   const oldEntry = existingUsers[userId];
@@ -324,18 +297,6 @@ async function handleRejoinRoom(socket, io, { roomCode, userId, username, creato
   io.to(trimmedCode).emit('user-rejoined', { userId, username });
   io.to(trimmedCode).emit('users-updated', { users, creator: updatedRoom?.creator || room.creator });
 
-  // Deliver missed messages
-  for (const msg of missed) {
-    socket.emit('new-message', msg);
-    // Notify the sender that their buffered message was delivered (double tick)
-    if (msg.senderId !== userId) {
-      socket.to(trimmedCode).emit('message-status-update', {
-        messageId: msg.messageId,
-        status: 'delivered',
-        userId,
-      });
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -377,7 +338,7 @@ async function handleLeaveRoom(socket, io) {
 // ---------------------------------------------------------------------------
 // Disconnect cleanup: remove user from room, notify remaining members
 // ---------------------------------------------------------------------------
-// Pending removal timers — allows grace period for offline buffering
+// Pending removal timers — allows a short grace period for reconnection before removing user
 const pendingRemovals = new Map();
 
 function cancelPendingRemoval(userId) {
@@ -407,9 +368,8 @@ async function handleDisconnect(socket, io) {
   io.to(roomId).emit('user-left', { userId, username });
   io.to(roomId).emit('user-state-changed', { userId, username, state: 'offline' });
 
-  // Delay Redis removal by 5 minutes to allow offline message buffering.
-  // During this window, messages sent to the room are buffered for this user.
-  // If the user rejoins within 5 min, the timer is cancelled and buffered msgs delivered.
+  // Delay Redis removal to allow reconnection within the grace window.
+  // If the user rejoins before the timer fires, cancelPendingRemoval stops the removal.
   const OFFLINE_GRACE_MS = 5 * 60 * 1000; // 5 minutes
   const timer = setTimeout(async () => {
     pendingRemovals.delete(userId);

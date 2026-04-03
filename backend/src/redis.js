@@ -245,49 +245,6 @@ async function deleteMessage(roomId, messageId) {
   }
 }
 
-// ---- Missed message buffer (for offline users) ----
-// Cap at MAX_MISSED_PER_USER to prevent unbounded growth
-const MAX_MISSED_PER_USER = 50;
-
-async function bufferMissedMessage(roomId, userId, messageData) {
-  const key = `${P}missed:${roomId}:${userId}`;
-  if (useMemory) {
-    let msgs = memGet(key) || [];
-    msgs.push(messageData);
-    // Keep only the last N messages
-    if (msgs.length > MAX_MISSED_PER_USER) {
-      msgs = msgs.slice(-MAX_MISSED_PER_USER);
-    }
-    memSet(key, msgs, 30 * 60);
-  } else {
-    await redis.rpush(key, JSON.stringify(messageData));
-    // Trim to keep only last N messages
-    await redis.ltrim(key, -MAX_MISSED_PER_USER, -1);
-    await redis.expire(key, 30 * 60);
-  }
-}
-
-async function getMissedMessages(roomId, userId) {
-  const key = `${P}missed:${roomId}:${userId}`;
-  if (useMemory) {
-    const msgs = memGet(key) || [];
-    memDel(key);
-    return msgs;
-  }
-  const msgs = await redis.lrange(key, 0, -1);
-  if (msgs.length > 0) await redis.del(key);
-  return msgs.map((m) => JSON.parse(m));
-}
-
-async function clearMissedMessages(roomId, userId) {
-  const key = `${P}missed:${roomId}:${userId}`;
-  if (useMemory) {
-    memDel(key);
-  } else {
-    await redis.del(key);
-  }
-}
-
 // ---- Room destruction ----
 async function destroyRoom(roomId) {
   // Delete all Redis keys associated with this room
@@ -297,33 +254,9 @@ async function destroyRoom(roomId) {
     `${P}room:${roomId}:pending`,   // Join requests
   ];
   
-  // Also delete any missed message keys for this room
-  if (!useMemory) {
-    // In Redis mode, we need to find and delete all missed message keys
-    const pattern = `${P}missed:${roomId}:*`;
-    const stream = redis.scanStream({
-      match: pattern,
-      count: 100
-    });
-    
-    for await (const foundKeys of stream) {
-      if (foundKeys.length > 0) {
-        await redis.del(...foundKeys);
-      }
-    }
-  }
-  
-  // Delete the main keys
   if (useMemory) {
     for (const key of keys) {
       memDel(key);
-    }
-    // Also clean up missed messages in memory
-    const missedPattern = `${P}missed:${roomId}:`;
-    for (const key of mem.keys()) {
-      if (key.startsWith(missedPattern)) {
-        memDel(key);
-      }
     }
   } else {
     await redis.del(...keys);
@@ -362,9 +295,6 @@ module.exports = {
   storeMessage,
   getMessage,
   deleteMessage,
-  bufferMissedMessage,
-  getMissedMessages,
-  clearMissedMessages,
   destroyRoom,
   checkRateLimit,
 };
