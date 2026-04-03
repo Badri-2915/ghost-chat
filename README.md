@@ -18,39 +18,43 @@ https://badri.online/api/health   Health check endpoint
 User (Browser)
      |
      v
-React SPA (Vite + TailwindCSS)
+React 18 SPA (Vite + TailwindCSS)
      |
-     v (WebSocket)
+     v (WebSocket — Socket.IO)
 Socket.IO Client ←→ Socket.IO Server (Node.js + Express)
                             |
-                            +── Room management (create/join/approve/reject)
-                            +── Message relay (encrypted payloads)
-                            +── Typing indicators
-                            +── Delivery & read receipts
-                            +── Panic delete (wipe all messages)
-                            +── 3-state presence (active/inactive/offline)
-                            +── Tab visibility awareness
+                            +── Room lifecycle (create/join/approve/reject/destroy)
+                            +── Message relay (encrypted payloads, never decrypted by server)
+                            +── Typing indicators (start/stop, debounced)
+                            +── Delivery & read receipts (sent → delivered → read)
+                            +── Panic delete (instant wipe for all users)
+                            +── 3-state presence (active / inactive / offline)
+                            +── Tab visibility awareness (user_inactive / user_active)
                             +── Delete permissions (sender-only + creator moderation)
-                            +── Offline message buffering & delivery
+                            +── Creator identity via creatorToken (not username)
+                            +── Offline grace period (5 min before user removed)
                             |
                             v
-                     Redis (gc: prefix)
-                            +── Room state (TTL)
-                            +── User presence
-                            +── Join requests
-                            +── Message metadata (TTL auto-expire)
-                            +── Offline message buffer (30 min TTL)
-                            +── Rate limiting counters
+                     Redis (gc: prefix, TTL-based)
+                            +── Room metadata (6h TTL)
+                            +── User presence map
+                            +── Pending join requests (30min TTL)
+                            +── Message metadata (per-message TTL: 3s–5m)
+                            +── Rate limiting counters (60s TTL)
 ```
 
 ```
 Message Flow:
 
-Sender → encrypt(AES-GCM, roomKey) → Socket.IO emit → Server relay → Socket.IO broadcast
-                                                                           ↓
-Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members receive
-                                                                           ↓
-                                                              Auto-delete after TTL expires
+Sender → encrypt(AES-GCM, roomKey) → Socket.IO emit('send-message')
+                                              ↓
+                                    Server validates + relays
+                                              ↓
+                              Socket.IO broadcast('new-message') → All room members
+                                              ↓
+Receiver ← decrypt(AES-GCM, roomKey) ← receives encrypted payload
+                                              ↓
+                                    TTL countdown begins → auto-delete fires
 ```
 
 ---
@@ -60,49 +64,52 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 | Feature | Description |
 |---------|-------------|
 | **Room-Based Chat** | Create or join rooms with 8-char secret codes |
-| **Controlled Access** | Room creator approves/rejects join requests |
+| **Controlled Access** | Room creator approves/rejects every join request |
 | **Real-Time Messaging** | Instant delivery via WebSockets (Socket.IO) |
-| **End-to-End Encryption** | AES-GCM encryption with room-derived key (PBKDF2) |
-| **Ephemeral Messages** | Auto-delete: after seen (3s), 5s, 15s, 30s, 1m, or 5m |
-| **Reply Feature** | Swipe-to-reply (touch), double-click/long-press menu (Copy/Reply/Delete) |
-| **Panic Button** | Instantly wipe all messages for all users in the room |
-| **Toast Notifications** | Join requests with inline Accept/Reject buttons |
-| **Typing Indicators** | See who's typing in real time |
-| **Read Receipts** | Sent → Delivered → Read status tracking |
-| **3-State Presence** | Active (green) / Inactive (gray, tab switched) / Offline (disconnected) |
-| **Deep Link Sharing** | Share `https://badri.online/r/CODE` — auto-fills room code on open |
-| **Creator Rejoin** | Creator auto-approved via secret `creatorToken` (NOT by username) |
-| **Creator Absence** | Join blocked when creator is offline — "Room creator is not available" |
-| **Room Auto-Destruction** | Empty rooms automatically destroyed (all Redis data cleaned) |
-| **Offline Recovery** | Messages buffered in Redis while user is offline, delivered on rejoin |
-| **Delete Permissions** | Only sender can delete own messages; room creator can moderate |
+| **End-to-End Encryption** | AES-GCM encryption with room-derived key (PBKDF2, 100K iterations) |
+| **Ephemeral Messages** | Auto-delete: after seen (3s delay), 5s, 15s, 30s, 1m, or 5m |
+| **Reply Feature** | Swipe-to-reply (touch), long-press/double-click menu (Copy/Reply/Delete) |
+| **Panic Button** | Two-click confirmation → instantly wipe all messages for all users |
+| **Toast Notifications** | Join requests with inline Accept/Reject buttons for creator |
+| **Typing Indicators** | See who's typing in real time (2s debounce) |
+| **Read Receipts** | Sent → Delivered → Read (IntersectionObserver-based) |
+| **3-State Presence** | Active (green) / Inactive (grey, tab hidden) / Offline (disconnected) |
+| **Deep Link Sharing** | Share `https://badri.online/r/CODE` — auto-fills join form on open |
+| **Creator Rejoin** | Creator auto-approved via secret `creatorToken` (not by username) |
+| **Creator Absence** | Join blocked when creator is offline — prevents unsupervised access |
+| **Room Auto-Destruction** | Empty rooms fully destroyed — all Redis keys cleaned immediately |
+| **Delete Permissions** | Sender deletes own messages; creator can moderate any message |
 | **Message Length Limit** | Max 5000 characters per message (server enforced) |
-| **Rate Limiting** | Per-user message limits + per-IP connection limits |
-| **Message Dedup** | Duplicate messages prevented on rejoin via messageId check |
-| **No Duplicate Users** | Stale sessions cleaned on rejoin, single entry per username |
+| **Rate Limiting** | 30 messages/min per user + 200 connections/min per IP |
+| **Message Dedup** | Duplicate messages prevented via messageId check |
+| **No Duplicate Users** | Stale sessions cleaned on rejoin, one entry per userId |
 | **Room Code Trimming** | Whitespace-tolerant room code matching for manual entry |
-| **Timer Privacy** | Ephemeral countdown visible only to sender, not receivers |
-| **Connection Handling** | Disconnect overlay, auto-reconnect, online/offline detection |
-| **Leave Room** | Clean exit with full state reset and server-side cleanup |
-| **Scroll-to-Bottom** | Smart auto-scroll + manual scroll button when reading history |
-| **No Data Storage** | No accounts, no databases, no persistent logs |
+| **Timer Privacy** | TTL countdown shown only to sender — hidden from recipients |
+| **Disconnect Overlay** | Blocks UI during reconnect, auto-reconnects on network restore |
+| **Session Persistence** | sessionStorage auto-rejoins on refresh; localStorage preserves creatorToken |
+| **Leave Room** | Clean exit with server-side cleanup + full state reset |
+| **Scroll-to-Bottom** | Smart auto-scroll + "N new messages" button when reading history |
+| **No Data Storage** | No accounts, no databases, no persistent logs — ever |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18 + Vite 5 + TailwindCSS 3 |
-| UI Icons | Lucide React |
-| Backend | Node.js + Express + Socket.IO 4 |
-| State & Cache | Redis (shared instance, `gc:` prefix, TTL-based) |
-| Encryption | Web Crypto API (ECDH key exchange + AES-GCM + PBKDF2) |
-| ID Generation | nanoid v3 (room codes) + uuid v9 (message IDs) |
-| Hosting | Render (Docker, free tier) |
-| Monitoring | UptimeRobot (5-min health pings) |
-| Domain | badri.online (GoDaddy) |
-| SEO | Google Search Console + sitemap.xml + robots.txt |
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Frontend framework | React 18 + Vite 5 | SPA, fast builds, HMR in dev |
+| Styling | TailwindCSS 3 | Utility-first CSS, custom design tokens |
+| UI Icons | Lucide React | Consistent SVG icon set |
+| Backend runtime | Node.js 20 + Express 4 | HTTP server, static serving, REST endpoints |
+| WebSockets | Socket.IO 4 | Bidirectional real-time events, auto-reconnect |
+| Cache / State | Redis 7 (`gc:` prefix, TTL auto-expiry) | Ephemeral room/user/message data |
+| Encryption | Web Crypto API (AES-GCM + PBKDF2) | Client-side E2EE, server never sees plaintext |
+| ID Generation | nanoid v3 | Room codes (8), user IDs (12), creator tokens (16) |
+| Message IDs | uuid v9 | 21-char unique message identifiers |
+| Hosting | Render (Docker, free tier) | Containerised deployment |
+| Monitoring | UptimeRobot (5-min pings) | Prevents free-tier cold starts |
+| Domain | badri.online (GoDaddy + Render DNS) | Custom domain with SSL |
+| SEO | Google Search Console + sitemap.xml + robots.txt | Indexing |
 
 ---
 
@@ -111,45 +118,45 @@ Receiver ← decrypt(AES-GCM, roomKey) ← Socket.IO on ← all room members rec
 ```
 ghost-chat/
 ├── render.yaml                          # Render Blueprint (web service + Redis)
-├── Dockerfile                           # Multi-stage: Node builds frontend → serves with backend
-├── docker-compose.yml                   # Local dev: backend + Redis
+├── Dockerfile                           # Multi-stage: build frontend → serve with backend
+├── docker-compose.yml                   # Local dev: backend + Redis side-by-side
 ├── backend/
 │   ├── src/
-│   │   ├── index.js                     # Express + Socket.IO server, event registration
-│   │   ├── redis.js                     # Redis client, gc: prefix, in-memory fallback
-│   │   ├── rateLimiter.js               # Per-user message + per-IP connection limits
+│   │   ├── index.js                     # Express server + Socket.IO setup + event registration
+│   │   ├── redis.js                     # Redis client + in-memory fallback + all data helpers
+│   │   ├── rateLimiter.js               # Per-user message + per-IP connection rate limits
 │   │   └── socket/
-│   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect
+│   │       ├── rooms.js                 # Room create/join/approve/reject/disconnect lifecycle
 │   │       └── handlers.js              # Messages, typing, receipts, panic, visibility
-│   ├── static/                          # Built frontend (production)
+│   ├── static/                          # Built frontend (committed, served by Express in prod)
 │   ├── test.js                          # Quick feature tests (46 assertions)
 │   └── test-comprehensive.js            # Full test suite (165 assertions)
 ├── frontend/
 │   ├── public/
-│   │   ├── sitemap.xml                  # SEO sitemap for Google
+│   │   ├── sitemap.xml                  # SEO sitemap for Google indexing
 │   │   └── robots.txt                   # Crawler instructions
 │   ├── src/
-│   │   ├── App.jsx                      # Root: Landing → WaitingRoom → ChatRoom
-│   │   ├── main.jsx                     # React entry point
-│   │   ├── index.css                    # Tailwind + custom animations
+│   │   ├── App.jsx                      # Root component: Landing → WaitingRoom → ChatRoom
+│   │   ├── main.jsx                     # React 18 entry point (ReactDOM.createRoot)
+│   │   ├── index.css                    # Tailwind directives + custom animations + tokens
 │   │   ├── context/
-│   │   │   └── ChatContext.jsx          # All state + socket events + actions
+│   │   │   └── ChatContext.jsx          # All global state + socket events + action functions
 │   │   ├── hooks/
-│   │   │   └── useSocket.js             # Socket.IO connection hook
+│   │   │   └── useSocket.js             # Socket.IO connection hook with reconnect logic
 │   │   ├── crypto/
-│   │   │   └── encryption.js            # ECDH, AES-GCM, PBKDF2 key derivation
+│   │   │   └── encryption.js            # AES-GCM encrypt/decrypt + PBKDF2 key derivation
 │   │   └── components/
-│   │       ├── Landing.jsx              # Create/Join room screen
-│   │       ├── WaitingRoom.jsx          # Pending approval screen
-│   │       ├── ChatRoom.jsx             # Main chat UI + panic button + reply bar
-│   │       ├── MessageBubble.jsx        # Message display + swipe + long-press menu
-│   │       ├── ToastContainer.jsx       # Toast notifications (join requests, alerts)
-│   │       ├── TypingIndicator.jsx      # "X is typing..." display
-│   │       ├── TimerSelector.jsx        # TTL picker (after seen, 5s, 15s, etc.)
-│   │       ├── UserList.jsx             # Online users sidebar
-│   │       └── JoinRequests.jsx         # Pending join requests sidebar
-│   └── index.html                       # SEO meta tags, Open Graph, Twitter Card
-└── docs/                                # (local) Project report + interview prep
+│   │       ├── Landing.jsx              # Create/Join room entry screen + deep link detection
+│   │       ├── WaitingRoom.jsx          # Pending approval screen shown after join request
+│   │       ├── ChatRoom.jsx             # Main chat UI: messages, input, sidebar, panic button
+│   │       ├── MessageBubble.jsx        # Single message: TTL countdown, receipts, swipe, menu
+│   │       ├── ToastContainer.jsx       # Floating toast notifications (join requests, alerts)
+│   │       ├── TypingIndicator.jsx      # "X is typing..." animated dots display
+│   │       ├── TimerSelector.jsx        # TTL picker: after-seen / 5s / 15s / 30s / 1m / 5m
+│   │       ├── UserList.jsx             # Sidebar: room members with 3-state presence dots
+│   │       └── JoinRequests.jsx         # Sidebar: pending join requests (creator only)
+│   └── index.html                       # HTML shell with SEO meta, Open Graph, Twitter Card
+└── docs/                                # Local only — project report + interview prep
 ```
 
 ---
@@ -158,7 +165,7 @@ ghost-chat/
 
 ### Prerequisites
 - Node.js 20+
-- Redis (local or Docker)
+- Redis (local install or Docker)
 
 ### Quick Start
 
@@ -172,51 +179,224 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 
 # 3. Backend
 cd backend
-cp .env.example .env    # Edit REDIS_URL if needed
+cp .env.example .env    # Set REDIS_URL=redis://localhost:6379 if needed
 npm install
 npm run dev             # Runs on http://localhost:3001
 
 # 4. Frontend (new terminal)
 cd frontend
-cp .env.example .env
+cp .env.example .env    # Set VITE_API_URL=http://localhost:3001
 npm install
-npm run dev             # Runs on http://localhost:5173 (proxies to backend)
+npm run dev             # Runs on http://localhost:5173 (proxied to backend)
 ```
 
-### Single-Origin Local Test
+### Single-Origin Local Test (matches production behaviour)
 
 ```bash
-cd frontend && npm run build
-cp -r dist ../backend/static
-# Now http://localhost:3001 serves everything (like production)
+cd frontend
+npm run build
+cp -r dist/* ../backend/static/
+# Now http://localhost:3001 serves everything from one origin
 ```
 
-### Using Docker
+### Using Docker Compose
 
 ```bash
-docker-compose up       # Backend + Redis
-cd frontend && npm run dev   # Frontend dev server
+docker-compose up         # Starts backend + Redis
+cd frontend && npm run dev  # Start frontend dev server separately
 ```
+
+### Environment Variables
+
+| Variable | Where | Description |
+|----------|-------|-------------|
+| `REDIS_URL` | backend `.env` | Redis connection string (default: `redis://localhost:6379`) |
+| `PORT` | backend `.env` | HTTP server port (default: `3001`) |
+| `VITE_API_URL` | frontend `.env` | Backend URL for Socket.IO (default: empty = same origin) |
+
+---
+
+## Build Pipeline
+
+```
+Development:
+  frontend/npm run dev  →  Vite HMR dev server (port 5173)
+                               ↓ proxies /socket.io → backend (port 3001)
+
+Production build:
+  frontend/npm run build  →  frontend/dist/
+  cp -r dist/* ../backend/static/
+  backend serves static/ via Express for all non-API routes
+
+Docker (Render):
+  Stage 1: node:20-alpine  →  builds frontend → /frontend/dist
+  Stage 2: node:20-alpine  →  copies dist to ./static, runs backend
+```
+
+> **Critical:** Never change `vite.config.js` `outDir` to `../backend/static/` — this breaks the Docker multi-stage build. Always build to `dist/` and copy manually for local testing.
+
+---
+
+## Socket.IO Events Reference
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `create-room` | Client → Server | Create a new room; server generates 8-char code |
+| `room-created` | Server → Client | Room created — returns `{ roomCode, userId, creatorToken }` |
+| `join-request` | Client → Server | Request to join a room by code |
+| `join-requested` | Server → Client | Acknowledgment of join request (go to WaitingRoom) |
+| `join-requests-updated` | Server → Creator | New pending request arrived |
+| `approve-join` | Creator → Server | Accept a join request |
+| `reject-join` | Creator → Server | Reject a join request |
+| `join-approved` | Server → Joiner | Request approved — enter room |
+| `join-rejected` | Server → Joiner | Request rejected — return to landing |
+| `rejoin-room` | Client → Server | Rejoin after reconnect (creatorToken for creator) |
+| `user-rejoined` | Server → Room | User reconnected (emitted before users-updated) |
+| `users-updated` | Server → Room | Full user list changed |
+| `user-left` | Server → Room | User disconnected |
+| `send-message` | Client → Server | Send encrypted message + TTL + optional replyTo |
+| `new-message` | Server → Room | Broadcast encrypted message to all members |
+| `delete-message` | Client → Server | Delete a single message (sender or creator only) |
+| `message-deleted` | Server → Room | Single message deleted notification |
+| `panic-delete` | Client → Server | Wipe ALL messages in the room |
+| `panic-delete` | Server → Room | All messages wiped — clear local list |
+| `typing-start` | Client → Server | User started typing |
+| `typing-stop` | Client → Server | User stopped typing |
+| `user-typing` | Server → Room | Broadcast typing started (excludes sender) |
+| `user-stopped-typing` | Server → Room | Broadcast typing stopped |
+| `message-delivered` | Client → Server | Message received by recipient's client |
+| `message-read` | Client → Server | Message scrolled into view (IntersectionObserver) |
+| `message-status-update` | Server → Sender | Status changed to delivered or read |
+| `visibility-change` | Client → Server | Browser tab became visible/hidden |
+| `user-visibility-changed` | Server → Room | Broadcast tab visibility change |
+| `user_inactive` | Client → Server | User switched to another tab |
+| `user_active` | Client → Server | User returned to this tab |
+| `user-state-changed` | Server → Room | Active/inactive state broadcast |
+| `leave-room` | Client → Server | User explicitly left the room |
+| `error-message` | Server → Client | Error notification (room not found, rate limited, etc.) |
+
+---
+
+## Encryption Design
+
+```
+Key Derivation:
+  roomCode (8 chars, ASCII)
+    → PBKDF2(SHA-256, iterations=100000, salt='ghost-chat-salt', keyLen=256)
+    → roomKey (AES-256-GCM CryptoKey)
+
+Sending a Message:
+  plaintext (UTF-8 string)
+    → TextEncoder → Uint8Array
+    → AES-GCM encrypt(roomKey, iv=crypto.getRandomValues(12 bytes))
+    → { iv: base64, ciphertext: base64 }
+    → Socket.IO emit('send-message', { content: { iv, ciphertext }, ... })
+
+Receiving a Message:
+  { iv: base64, ciphertext: base64 }
+    → base64 decode
+    → AES-GCM decrypt(roomKey, iv)
+    → Uint8Array → TextDecoder → plaintext string
+
+Server role: relay only — never accesses plaintext, never stores ciphertext permanently
+```
+
+**Key properties:**
+- Room key derived from room code — anyone with the code can decrypt
+- Fresh random 96-bit IV per message — prevents IV reuse attacks
+- PBKDF2 with 100,000 iterations — makes brute-force on room codes expensive
+- Server stores nothing — encrypted payload is relayed and discarded
+
+---
+
+## Session Persistence
+
+```
+sessionStorage (key: 'gc_session')
+  Stores: { screen, username, roomCode, userId, isCreator, creatorToken }
+  Cleared by: leaveRoom()
+  Used for: auto-rejoin on page refresh / network reconnect
+
+localStorage (key: 'gc_ct_ROOMCODE')
+  Stores: creatorToken (survives leave and browser close)
+  Never cleared automatically
+  Used for: creator can rejoin and reclaim creator role even after leaving
+```
+
+On every socket `connect` event, if `gc_session` exists, the client emits `rejoin-room` automatically. The server verifies creatorToken (if provided) and grants creator status if it matches.
+
+---
+
+## Presence System (3-State)
+
+| State | Trigger | Visual |
+|-------|---------|--------|
+| **active** | Tab focused, socket connected | Green dot |
+| **inactive** | Tab hidden (`document.visibilityState === 'hidden'`) | Grey dot |
+| **offline** | Socket disconnected (pingTimeout: 20s or `beforeunload`) | Red dot |
+
+```
+Tab switch:    client emits user_inactive → server broadcasts user-state-changed(inactive)
+Tab return:    client emits user_active   → server broadcasts user-state-changed(active)
+Disconnect:    server emits user-left + user-state-changed(offline) immediately
+               5-minute grace timer starts → if no rejoin, user removed from room
+Page close:    navigator.sendBeacon('/api/leave') → instant offline before socket times out
+```
+
+---
+
+## Rate Limiting
+
+| Limit | Value | Scope |
+|-------|-------|-------|
+| Messages | 30 per minute | Per userId |
+| Connections | 200 per minute | Per IP address |
+
+Redis is used as the counter store with 60-second TTL keys. Falls back to an in-memory Map if Redis is unavailable.
+
+```
+Redis key pattern:
+  rl:msg:{userId}   → message count (expires in 60s)
+  rl:con:{ip}       → connection count (expires in 60s)
+```
+
+---
+
+## Redis Data Model
+
+All keys use the `gc:` prefix (shared Redis instance with other apps).
+
+| Key | Type | TTL | Contents |
+|-----|------|-----|----------|
+| `gc:room:{code}` | Hash | 6 hours | `{ creator, creatorToken, createdAt }` |
+| `gc:room:{code}:users` | Hash | 6 hours | `{ [userId]: username }` |
+| `gc:room:{code}:pending` | Hash | 30 min | `{ [userId]: username }` — join requests |
+| `gc:msg:{msgId}` | String | per-TTL | Message metadata JSON |
+| `gc:rl:msg:{userId}` | String | 60s | Message rate limit counter |
+| `gc:rl:con:{ip}` | String | 60s | Connection rate limit counter |
+
+When a room becomes empty (last user disconnects after grace period), `destroyRoom()` deletes all `gc:room:{code}*` and `gc:msg:*` keys atomically.
 
 ---
 
 ## Testing
 
 ```bash
-# Start server first, then:
+# Start server first (backend must be running on port 3001)
 cd backend
-node test.js                  # Quick suite: 46 assertions
-node test-comprehensive.js    # Full suite: 165 assertions
+
+node test.js                  # Quick suite: 46 assertions (~5s)
+node test-comprehensive.js    # Full suite: 165 assertions (~30s)
 ```
 
-### Test Coverage (24 test suites, 165 assertions)
+### Test Coverage (24 suites, 165 assertions)
 
 | Suite | Assertions | Covers |
 |-------|------------|--------|
-| Health & Server | 9 | API, SPA fallback, uptime, response time |
-| Room Creation | 14 | Unique codes, user IDs, special chars, empty/long usernames |
-| Join Request Flow | 13 | Approve, reject, invalid code, non-creator auth, auto-approve |
-| Messaging | 17 | Send, receive, all TTL values, receipts, outsider block, edge cases |
+| Health & Server | 9 | API endpoints, SPA fallback, response time |
+| Room Creation | 14 | Unique codes, user IDs, special chars, edge cases |
+| Join Request Flow | 13 | Approve, reject, invalid code, non-creator auth |
+| Messaging | 17 | Send, receive, all TTL values, receipts, outsider block |
 | Reply Feature | 10 | Reply refs, chains, self-reply, null replyTo |
 | Message Deletion | 5 | Single delete, multi-delete, non-existent, outsider |
 | Panic Delete | 6 | Creator/joiner trigger, empty room, rapid, outsider |
@@ -226,72 +406,15 @@ node test-comprehensive.js    # Full suite: 165 assertions
 | 3-State Presence | 7 | Active/inactive broadcast, rapid toggles, creator state |
 | Visibility | 6 | Hide/show, rapid, outsider, creator |
 | Delete Permissions | 4 | Sender-only, creator moderation, non-sender rejected |
-| Message Constraints | 4 | Max 5000 chars, oversized rejected, empty ok, object ok |
-| Creator Rejoin & No Duplicates | 5 | Auto-approve, no duplicate users, whitespace-padded code |
-| Offline Message Recovery | 6 | Missed messages, creator rejoin + missed, content order |
-| Room Code Trimming | 4 | Whitespace join, whitespace rejoin, empty-after-trim |
+| Message Constraints | 4 | Max 5000 chars, oversized rejected, empty ok |
+| Creator Rejoin & No Duplicates | 5 | Auto-approve, no duplicate users, whitespace code |
+| Room Code Trimming | 4 | Whitespace join/rejoin, empty-after-trim |
 | Rejoin Active State | 2 | User broadcasts active on rejoin, no stale inactive |
-| Creator Identity & Absence | 5 | creatorToken verification, imposter blocked, creator absent blocked |
+| Creator Identity & Absence | 5 | creatorToken verify, imposter blocked, absent blocked |
 | Room Auto-Destruction | 3 | Empty rooms destroyed, all Redis data cleaned |
-| Edge Cases & Stability | 9 | Unicode, long msgs, burst 20 msgs, post-disconnect, concurrent ops |
-| Multiple Users & Concurrency | 8 | 3-user broadcast, cross-room isolation, concurrent creation |
+| Edge Cases & Stability | 9 | Unicode, long msgs, burst 20 msgs, concurrent ops |
+| Multiple Users & Concurrency | 8 | 3-user broadcast, cross-room isolation |
 | Clean Exit | 3 | Leave notification, Redis cleanup, graceful disconnect |
-
----
-
-## Socket.IO Events
-
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| `create-room` | Client → Server | Create a new chat room |
-| `room-created` | Server → Client | Room created with code + userId |
-| `join-request` | Client → Server | Request to join a room |
-| `join-requested` | Server → Client | Acknowledgment of join request |
-| `join-requests-updated` | Server → Creator | New pending join request |
-| `approve-join` / `reject-join` | Creator → Server | Accept/reject join request |
-| `join-approved` / `join-rejected` | Server → Joiner | Result of join request |
-| `send-message` | Client → Server | Send encrypted message (+ optional replyTo) |
-| `new-message` | Server → Room | Broadcast message to all room members |
-| `delete-message` | Client → Server | Delete a message (sender or creator only) |
-| `message-deleted` | Server → Room | Message deleted notification |
-| `panic-delete` | Client → Server | Wipe all messages in room |
-| `panic-delete` | Server → Room | All messages wiped notification |
-| `typing-start` / `typing-stop` | Client → Server | Typing indicator |
-| `user-typing` / `user-stopped-typing` | Server → Room | Typing broadcast |
-| `message-delivered` / `message-read` | Client → Server | Delivery/read receipt |
-| `message-status-update` | Server → Sender | Status update (delivered/read) |
-| `visibility-change` | Client → Server | Tab visible/hidden |
-| `user-visibility-changed` | Server → Room | User visibility broadcast |
-| `user_inactive` | Client → Server | User switched tab (3-state) |
-| `user_active` | Client → Server | User returned to tab (3-state) |
-| `user-state-changed` | Server → Room | Broadcast active/inactive state |
-| `rejoin-room` | Client → Server | Rejoin after disconnect (delivers missed msgs) |
-| `user-rejoined` | Server → Room | User reconnected notification |
-| `users-updated` | Server → Room | Online users list changed |
-| `user-left` | Server → Room | User disconnected |
-| `error-message` | Server → Client | Error notification |
-
----
-
-## Encryption Design
-
-```
-Room Creation:
-  roomCode (8 chars) → PBKDF2 → roomKey (AES-256)
-
-Sending a Message:
-  plaintext → AES-GCM encrypt(roomKey, random IV) → { iv, ciphertext } → Socket.IO emit
-
-Receiving a Message:
-  { iv, ciphertext } → AES-GCM decrypt(roomKey, iv) → plaintext
-
-Key Exchange (future):
-  Each user generates ECDH key pair → exchange public keys → derive shared secret
-```
-
-- Server **never** sees plaintext — only relays encrypted payloads
-- Room key derived from room code via PBKDF2 (256-bit, 100K iterations)
-- Each message encrypted with a fresh random IV (96-bit)
 
 ---
 
@@ -303,9 +426,9 @@ Key Exchange (future):
 |--------|----------|-----------|
 | Concurrent users (total) | ~50–100 | Render free tier memory (512 MB) |
 | Users per room | ~20 | Socket.IO broadcast fan-out |
-| Active rooms | ~50 simultaneous | Redis memory (25 MB free) |
-| Messages per minute | ~500 total | Rate limit: 30/user/min |
-| Average message size | ~300–500 bytes | Encrypted payload + metadata |
+| Active rooms | ~50 simultaneously | Redis memory (25 MB free tier) |
+| Messages per minute (total) | ~500 | Rate limit: 30/user/min |
+| Average message size | ~300–500 bytes | AES-GCM ciphertext + metadata |
 
 ### Storage Design — No Database
 
@@ -314,71 +437,55 @@ Ghost Chat **intentionally has no permanent storage**:
 - **No SQL database** (no PostgreSQL, MySQL, SQLite)
 - **No NoSQL database** (no MongoDB, DynamoDB)
 - **No file storage** (no S3, no disk writes)
-- **Only Redis** — used purely as a temporary cache with TTL-based auto-expiry
-
-Every piece of data has a time-to-live:
+- **Only Redis** — temporary cache with TTL-based auto-expiry
 
 | Data | TTL | What happens when it expires |
 |------|-----|------------------------------|
 | Room metadata | 6 hours | Room ceases to exist |
-| User presence | 6 hours | User entry removed |
-| Join requests | 30 minutes | Request auto-rejected |
-| Messages | 3s – 5m (user-selected) | Message permanently deleted |
-| Missed msg buffer | 30 minutes | Offline messages cleared |
-| Rate limit counters | 60 seconds | Counter resets |
+| User presence map | 6 hours | Users cleared |
+| Join requests | 30 minutes | Request auto-cancelled |
+| Messages (timed TTL) | 5s – 5m | Message permanently deleted from all clients |
+| Messages (after-seen) | ~3s after read | Message deleted after recipient reads it |
+| Rate limit counters | 60 seconds | Counter resets, limiting window slides |
 
-**If Redis restarts, all data is lost — by design.** There is nothing to recover, nothing to back up, and nothing to breach.
-
-### Why This Matters
-
-- **No data accumulation** — storage usage stays near-constant regardless of how long the app runs
-- **No cleanup scripts** — Redis handles all expiration natively
-- **No scaling headaches** — there's no growing database to manage
-- **Privacy by architecture** — even a server compromise reveals nothing (E2EE + no persistent data)
+**If Redis restarts, all data is lost — by design.**
 
 ### Scaling Beyond Free Tier
 
 | Change | Enables |
 |--------|---------|
 | Render paid tier ($7/mo) | ~500 concurrent users, dedicated resources |
-| Socket.IO Redis adapter | Horizontal scaling across multiple Node.js processes |
-| Redis Cluster | Higher memory, better throughput |
+| Socket.IO Redis adapter | Horizontal scaling (multiple Node.js processes) |
+| Redis Cluster | Higher throughput, more memory |
 | Cloudflare CDN (free) | Faster static asset delivery worldwide |
-
-The architecture is designed to scale — but the current deployment is right-sized for its purpose: small, private rooms.
 
 ---
 
 ## Security & Privacy
 
 ### What this system does:
-- Encrypts messages client-side (AES-GCM) before sending
-- Server only relays opaque encrypted data
+- Encrypts all messages client-side (AES-GCM) before transmitting
+- Server only relays opaque encrypted blobs — never accesses plaintext
 - No permanent message storage — Redis TTL auto-expires everything
-- No user accounts, no emails, no personal data
-- Messages auto-delete from all clients and server
-- Rate limiting prevents spam and abuse (30 msgs/min, 200 conn/min)
-- **Creator identity via `creatorToken`** — secret token, NOT username-based
-- Username is display-only; duplicate names are allowed (different users)
-- Join blocked when creator is absent (no unsupervised access)
-- **Room auto-destruction** — empty rooms completely removed (metadata, users, pending, messages)
-- Delete permissions: only sender can delete own messages (creator can moderate)
-- Message length capped at 5000 characters (server enforced)
-- Tab detection warns when users switch away
-- Connection loss overlay with auto-reconnect
-- Leave room functionality with full state cleanup
+- No user accounts, no emails, no personal data collected
+- Messages auto-delete from every client and the server simultaneously
+- Rate limiting: 30 msgs/min per user, 200 connections/min per IP
+- **Creator identity secured by `creatorToken`** — 16-char secret, not username
+- Join blocked when creator is absent — no unsupervised room access
+- **Room auto-destruction** — empty rooms fully cleaned (all Redis keys removed)
+- Delete permissions: sender deletes own messages; creator moderates all
+- 5-minute offline grace period — reconnect window before user is removed
 
 ### Honest Limitations:
-- Cannot prevent network-level metadata visibility (IP addresses)
-- Cannot prevent screenshots (removed detection — not feasible in web apps)
-- Messages are permanently lost after deletion (by design)
-- Room key is derived from room code — anyone with the code can decrypt
-- Requires trust in client-side encryption implementation
-- Single-server deployment (no horizontal scaling currently)
+- Room key derived from room code — anyone with the code can decrypt messages
+- Cannot prevent network-level metadata visibility (IP addresses visible to server)
+- Cannot prevent screenshots (screenshot detection is not feasible in web apps)
+- Requires trust in the client-side encryption implementation
+- Single-server deployment currently (no horizontal scaling)
 - Free tier cold starts (~30s after 15 min inactivity, mitigated by UptimeRobot)
-- Room destruction is final — all data permanently removed when empty
+- Room destruction is final — no recovery once empty room timer fires
 
-> Designed to **minimize data exposure and attack surface**, not to guarantee absolute anonymity. Scales with infrastructure, not unlimited.
+> Designed to **minimise data exposure and attack surface**, not to guarantee absolute anonymity.
 
 ---
 
@@ -386,12 +493,12 @@ The architecture is designed to scale — but the current deployment is right-si
 
 1. Push repo to GitHub
 2. Go to [render.com](https://render.com) → **New +** → **Blueprint**
-3. Connect your repo → Render reads `render.yaml`
-4. Fill in environment variables (REDIS_URL is auto-set by the blueprint)
-5. Deploy → get `https://ghost-chat-broc.onrender.com`
+3. Connect your repo → Render reads `render.yaml` automatically
+4. `REDIS_URL` is auto-configured by the Blueprint's Redis service
+5. Deploy → get `https://ghost-chat-xxxx.onrender.com`
 6. **Settings → Custom Domains** → add `badri.online`
-7. Add DNS records on GoDaddy as shown by Render
-8. Set up UptimeRobot: `https://badri.online/api/health` every 5 minutes
+7. Add DNS records on GoDaddy as shown by Render (CNAME/A record)
+8. Set up UptimeRobot: monitor `https://badri.online/api/health` every 5 minutes
 
 See [SETUP_GUIDE.md](./SETUP_GUIDE.md) for detailed step-by-step instructions.
 
@@ -402,6 +509,7 @@ See [SETUP_GUIDE.md](./SETUP_GUIDE.md) for detailed step-by-step instructions.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Health check (status, connections, uptime) |
+| POST | `/api/leave` | Instant offline signal (called via `sendBeacon` on page close) |
 
 ```bash
 curl https://badri.online/api/health
@@ -436,7 +544,7 @@ curl https://badri.online/api/health
 | [README.md](./README.md) | GitHub | This file — overview, setup, architecture |
 | [SETUP_GUIDE.md](./SETUP_GUIDE.md) | GitHub | Step-by-step deployment guide |
 | `docs/PROJECT-REPORT.md` | Local only | Complete project report (~200 pages) |
-| `docs/INTERVIEW-PREP.md` | Local only | Interview preparation document (40 sections) |
+| `docs/INTERVIEW-PREP.md` | Local only | Interview preparation document (~60 pages) |
 
 ---
 
